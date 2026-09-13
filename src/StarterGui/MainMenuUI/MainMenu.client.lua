@@ -47,6 +47,97 @@ task.spawn(function()
 	end
 end)
 
+-- Characters continue to exist in the real lobby while the front end is open,
+-- but the title screen should never render them. LocalTransparencyModifier keeps
+-- this presentation-only and avoids fighting the server's lobby state.
+local hiddenCharacterState = {}
+local characterConnections = {}
+local playerConnections = {}
+
+local function rememberAndHideCharacterObject(object)
+	if hiddenCharacterState[object] then return end
+
+	if object:IsA("BasePart") then
+		hiddenCharacterState[object] = {Kind = "BasePart", Value = object.LocalTransparencyModifier}
+		object.LocalTransparencyModifier = 1
+	elseif object:IsA("Highlight") then
+		hiddenCharacterState[object] = {Kind = "Highlight", Value = object.Enabled}
+		object.Enabled = false
+	elseif object:IsA("BillboardGui") then
+		hiddenCharacterState[object] = {Kind = "BillboardGui", Value = object.Enabled}
+		object.Enabled = false
+	elseif object:IsA("Humanoid") then
+		hiddenCharacterState[object] = {Kind = "Humanoid", Value = object.DisplayDistanceType}
+		object.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	end
+end
+
+local function hideCharacter(character)
+	if not character then return end
+	for _, descendant in ipairs(character:GetDescendants()) do
+		rememberAndHideCharacterObject(descendant)
+	end
+
+	if characterConnections[character] then
+		characterConnections[character]:Disconnect()
+	end
+	characterConnections[character] = character.DescendantAdded:Connect(function(descendant)
+		if menuOwnsControls then
+			rememberAndHideCharacterObject(descendant)
+		end
+	end)
+end
+
+local function watchPlayerCharacter(targetPlayer)
+	if targetPlayer.Character then
+		hideCharacter(targetPlayer.Character)
+	end
+	if playerConnections[targetPlayer] then
+		playerConnections[targetPlayer]:Disconnect()
+	end
+	playerConnections[targetPlayer] = targetPlayer.CharacterAdded:Connect(function(character)
+		if menuOwnsControls then
+			hideCharacter(character)
+		end
+	end)
+end
+
+for _, targetPlayer in ipairs(Players:GetPlayers()) do
+	watchPlayerCharacter(targetPlayer)
+end
+
+local playerAddedConnection = Players.PlayerAdded:Connect(function(targetPlayer)
+	watchPlayerCharacter(targetPlayer)
+end)
+
+local function restoreCharacterVisibility()
+	for character, connection in pairs(characterConnections) do
+		if connection then connection:Disconnect() end
+		characterConnections[character] = nil
+	end
+	for targetPlayer, connection in pairs(playerConnections) do
+		if connection then connection:Disconnect() end
+		playerConnections[targetPlayer] = nil
+	end
+	if playerAddedConnection then
+		playerAddedConnection:Disconnect()
+		playerAddedConnection = nil
+	end
+
+	for object, state in pairs(hiddenCharacterState) do
+		if object and object.Parent then
+			if state.Kind == "BasePart" then
+				object.LocalTransparencyModifier = state.Value
+			elseif state.Kind == "Highlight" or state.Kind == "BillboardGui" then
+				object.Enabled = state.Value
+			elseif state.Kind == "Humanoid" then
+				object.DisplayDistanceType = state.Value
+			end
+		end
+		hiddenCharacterState[object] = nil
+	end
+end
+
 local function create(className, name, parent, properties)
 	local instance = Instance.new(className)
 	instance.Name = name
@@ -95,8 +186,8 @@ Lighting.ClockTime = 18.65
 Lighting.Ambient = Color3.fromRGB(37, 51, 62)
 Lighting.OutdoorAmbient = Color3.fromRGB(49, 64, 73)
 Lighting.FogColor = Color3.fromRGB(73, 112, 126)
-Lighting.FogStart = 65
-Lighting.FogEnd = 610
+Lighting.FogStart = 52
+Lighting.FogEnd = 535
 
 local bloom = create("BloomEffect", "MainMenuBloom", Lighting, {
 	Intensity = 0.45,
@@ -105,12 +196,18 @@ local bloom = create("BloomEffect", "MainMenuBloom", Lighting, {
 })
 local colorGrade = create("ColorCorrectionEffect", "MainMenuColorGrade", Lighting, {
 	Brightness = -0.04,
-	Contrast = 0.09,
-	Saturation = -0.19,
+	Contrast = 0.12,
+	Saturation = -0.23,
 	TintColor = Color3.fromRGB(207, 226, 232),
 })
 
 local sceneFolder = create("Folder", "MainMenuScene_Client", workspace)
+
+-- Keep the title-screen diorama completely separate from the physical sky lobby.
+-- The lobby lives around Y ~= 2000; this scene is intentionally thousands of studs
+-- away so real characters, lobby geometry, and showcase props can never drift into
+-- the title camera's frustum.
+local MENU_ORIGIN = Vector3.new(24000, 9200, -24000)
 
 local function scenePart(name, size, cframe, color, material, transparency, shape)
 	local part = create("Part", name, sceneFolder, {
@@ -129,24 +226,65 @@ local function scenePart(name, size, cframe, color, material, transparency, shap
 	return part
 end
 
-local baseY = 1999
+local baseY = MENU_ORIGIN.Y
 scenePart(
 	"DistantGround",
-	Vector3.new(1100, 5, 1100),
-	CFrame.new(0, baseY - 2.5, 235),
-	Color3.fromRGB(11, 17, 22),
+	Vector3.new(1250, 8, 1250),
+	CFrame.new(MENU_ORIGIN + Vector3.new(0, -4, 250)),
+	Color3.fromRGB(8, 13, 18),
 	Enum.Material.Slate
 )
 
+-- Layer 1: chunky foreground silhouettes. These intentionally fill the bottom of
+-- the frame and give the camera something close enough to create parallax.
+local foregroundRocks = {
+	{-235, 16, -52, 180, 38, 96, -9},
+	{-92, 12, -34, 155, 29, 88, 7},
+	{72, 15, -42, 170, 36, 92, -5},
+	{222, 13, -56, 185, 31, 100, 8},
+}
+
+for index, data in ipairs(foregroundRocks) do
+	local x, y, z, sx, sy, sz, rot = table.unpack(data)
+	scenePart(
+		"ForegroundRock" .. index,
+		Vector3.new(sx, sy, sz),
+		CFrame.new(MENU_ORIGIN + Vector3.new(x, y, z)) * CFrame.Angles(math.rad(-4), math.rad(rot), math.rad(rot * 0.18)),
+		Color3.fromRGB(7, 11, 15),
+		Enum.Material.Slate
+	)
+end
+
+-- Layer 2: readable terrain masses. These provide the broad stepped ridgeline
+-- that the original sparse spires were missing.
+local midground = {
+	{-285, 22, 128, 150, 44, 170, -8},
+	{-150, 30, 155, 175, 60, 190, 4},
+	{4, 24, 132, 140, 48, 175, -4},
+	{142, 35, 168, 180, 70, 215, 7},
+	{308, 20, 142, 165, 40, 180, -6},
+}
+
+for index, data in ipairs(midground) do
+	local x, y, z, sx, sy, sz, rot = table.unpack(data)
+	scenePart(
+		"MidgroundMass" .. index,
+		Vector3.new(sx, sy, sz),
+		CFrame.new(MENU_ORIGIN + Vector3.new(x, y, z)) * CFrame.Angles(math.rad(-2), math.rad(rot), math.rad(rot * 0.12)),
+		Color3.fromRGB(15 + index, 23 + index, 29 + index),
+		Enum.Material.Slate
+	)
+end
+
 local spires = {
-	{-270, 112, 240, 44, 112, 48, -8},
-	{-184, 89, 190, 30, 89, 34, 9},
-	{-111, 136, 310, 38, 136, 38, -4},
-	{-32, 75, 226, 28, 75, 42, 13},
-	{72, 115, 268, 44, 115, 54, -9},
-	{158, 83, 205, 34, 83, 34, 6},
-	{245, 151, 330, 52, 151, 46, 11},
-	{328, 97, 255, 31, 97, 37, -6},
+	{-305, 122, 330, 50, 122, 54, -8},
+	{-210, 91, 285, 32, 91, 38, 9},
+	{-120, 162, 395, 42, 162, 44, -4},
+	{-28, 84, 300, 30, 84, 46, 13},
+	{92, 128, 360, 46, 128, 58, -9},
+	{190, 96, 292, 38, 96, 40, 6},
+	{292, 178, 430, 58, 178, 50, 11},
+	{385, 104, 338, 34, 104, 40, -6},
 }
 
 for index, data in ipairs(spires) do
@@ -154,7 +292,7 @@ for index, data in ipairs(spires) do
 	scenePart(
 		"Spire" .. index,
 		Vector3.new(sx, sy, sz),
-		CFrame.new(x, baseY + height * 0.5, z) * CFrame.Angles(0, math.rad(rot), math.rad(rot * 0.12)),
+		CFrame.new(MENU_ORIGIN + Vector3.new(x, height * 0.5, z)) * CFrame.Angles(0, math.rad(rot), math.rad(rot * 0.12)),
 		Color3.fromRGB(18 + index, 26 + index, 31 + index),
 		Enum.Material.Slate
 	)
@@ -162,45 +300,110 @@ end
 
 local moon = scenePart(
 	"SignalMoon",
-	Vector3.new(118, 118, 118),
-	CFrame.new(-195, 2114, 458),
+	Vector3.new(138, 138, 138),
+	CFrame.new(MENU_ORIGIN + Vector3.new(-225, 155, 525)),
 	Color3.fromRGB(129, 205, 224),
 	Enum.Material.Neon,
 	0.22,
 	Enum.PartType.Ball
 )
 create("PointLight", "MoonGlow", moon, {
-	Brightness = 2.4,
+	Brightness = 2.8,
 	Color = Color3.fromRGB(124, 207, 226),
-	Range = 190,
+	Range = 225,
+})
+
+-- Strong midground focal point: a damaged relay mast with restrained cyan light.
+local relayBase = scenePart(
+	"SignalRelayBase",
+	Vector3.new(34, 8, 42),
+	CFrame.new(MENU_ORIGIN + Vector3.new(118, 7, 118)) * CFrame.Angles(0, math.rad(-14), 0),
+	Color3.fromRGB(19, 30, 37),
+	Enum.Material.Metal
+)
+local relayMast = scenePart(
+	"SignalRelayMast",
+	Vector3.new(7, 72, 7),
+	CFrame.new(MENU_ORIGIN + Vector3.new(118, 46, 118)) * CFrame.Angles(0, 0, math.rad(-5)),
+	Color3.fromRGB(26, 40, 48),
+	Enum.Material.Metal
+)
+local relayCore = scenePart(
+	"SignalRelayCore",
+	Vector3.new(13, 13, 13),
+	CFrame.new(MENU_ORIGIN + Vector3.new(114, 72, 118)),
+	Color3.fromRGB(117, 216, 235),
+	Enum.Material.Neon,
+	0.12,
+	Enum.PartType.Ball
+)
+create("PointLight", "RelayGlow", relayCore, {
+	Brightness = 3.2,
+	Color = Color3.fromRGB(112, 218, 239),
+	Range = 72,
+})
+
+for index = 1, 3 do
+	local arm = scenePart(
+		"RelayArm" .. index,
+		Vector3.new(3, 26 + index * 4, 3),
+		CFrame.new(MENU_ORIGIN + Vector3.new(114, 68, 118))
+			* CFrame.Angles(math.rad(72), math.rad((index - 1) * 120), 0)
+			* CFrame.new(0, 13, 0),
+		Color3.fromRGB(41, 58, 66),
+		Enum.Material.Metal
+	)
+	arm.CanCollide = false
+end
+
+-- Secondary focal shape: a low wreck silhouette offset to the right.
+scenePart(
+	"WreckHull",
+	Vector3.new(68, 18, 30),
+	CFrame.new(MENU_ORIGIN + Vector3.new(248, 15, 95)) * CFrame.Angles(math.rad(7), math.rad(-20), math.rad(3)),
+	Color3.fromRGB(17, 27, 33),
+	Enum.Material.Metal
+)
+local wreckLight = scenePart(
+	"WreckLight",
+	Vector3.new(10, 3, 3),
+	CFrame.new(MENU_ORIGIN + Vector3.new(226, 21, 83)) * CFrame.Angles(0, math.rad(-20), 0),
+	Color3.fromRGB(119, 211, 230),
+	Enum.Material.Neon,
+	0.16
+)
+create("PointLight", "WreckGlow", wreckLight, {
+	Brightness = 1.8,
+	Color = Color3.fromRGB(112, 202, 222),
+	Range = 44,
 })
 
 for index = 1, 11 do
-	local x = -315 + index * 56
-	local z = 125 + ((index * 73) % 215)
-	local y = baseY + 25 + ((index * 29) % 72)
+	local x = -335 + index * 58
+	local z = 190 + ((index * 73) % 245)
+	local y = baseY + 34 + ((index * 29) % 86)
 	local shard = scenePart(
 		"FloatingShard" .. index,
 		Vector3.new(5 + (index % 4) * 2, 15 + (index % 3) * 4, 5),
-		CFrame.new(x, y, z) * CFrame.Angles(math.rad(index * 13), math.rad(index * 29), math.rad(index * 7)),
+		CFrame.new(MENU_ORIGIN.X + x, y, MENU_ORIGIN.Z + z) * CFrame.Angles(math.rad(index * 13), math.rad(index * 29), math.rad(index * 7)),
 		Color3.fromRGB(40, 57, 66),
 		Enum.Material.Slate,
-		0.12
+		0.22
 	)
 	shard:SetAttribute("MenuBaseY", y)
 end
 
-for index = 1, 9 do
-	local x = -230 + index * 51
-	local z = 70 + ((index * 91) % 280)
-	local y = baseY + 42 + ((index * 37) % 68)
+for index = 1, 15 do
+	local x = -300 + index * 42
+	local z = 45 + ((index * 91) % 355)
+	local y = baseY + 35 + ((index * 37) % 118)
 	local mote = scenePart(
 		"SignalMote" .. index,
-		Vector3.new(1.1, 1.1, 1.1),
-		CFrame.new(x, y, z),
+		Vector3.new(0.8 + (index % 3) * 0.35, 0.8 + (index % 3) * 0.35, 0.8 + (index % 3) * 0.35),
+		CFrame.new(MENU_ORIGIN.X + x, y, MENU_ORIGIN.Z + z),
 		Color3.fromRGB(130, 220, 235),
 		Enum.Material.Neon,
-		0.28,
+		0.35,
 		Enum.PartType.Ball
 	)
 	mote:SetAttribute("MenuBaseY", y)
@@ -295,18 +498,18 @@ local logoLine = create("Frame", "LogoLine", logoGroup, {
 })
 
 local profile = create("Frame", "Profile", root, {
-	Size = UDim2.new(0, 270, 0, 64),
-	Position = UDim2.new(1, -300, 0, 24),
+	Size = UDim2.new(0, 226, 0, 48),
+	Position = UDim2.new(1, -248, 0, 22),
 	BackgroundColor3 = COLORS.Ink,
-	BackgroundTransparency = 0.55,
+	BackgroundTransparency = 0.72,
 	BorderSizePixel = 0,
 	ZIndex = 4,
 })
-addStroke(profile, COLORS.AccentSoft, 0.65, 1)
+addStroke(profile, COLORS.AccentSoft, 0.78, 1)
 
 local avatar = create("ImageLabel", "Avatar", profile, {
-	Size = UDim2.new(0, 46, 0, 46),
-	Position = UDim2.new(0, 9, 0.5, -23),
+	Size = UDim2.new(0, 32, 0, 32),
+	Position = UDim2.new(0, 8, 0.5, -16),
 	BackgroundColor3 = COLORS.Panel,
 	BackgroundTransparency = 0.2,
 	BorderSizePixel = 0,
@@ -316,46 +519,46 @@ local avatar = create("ImageLabel", "Avatar", profile, {
 create("UICorner", "Corner", avatar, {CornerRadius = UDim.new(1, 0)})
 
 create("TextLabel", "Username", profile, {
-	Size = UDim2.new(1, -72, 0, 25),
-	Position = UDim2.new(0, 66, 0, 8),
+	Size = UDim2.new(1, -54, 0, 20),
+	Position = UDim2.new(0, 50, 0, 5),
 	BackgroundTransparency = 1,
 	Text = string.upper(player.DisplayName),
 	TextColor3 = COLORS.Text,
-	TextSize = 16,
+	TextSize = 13,
 	Font = Enum.Font.GothamBold,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	ZIndex = 5,
 })
 
 create("TextLabel", "Status", profile, {
-	Size = UDim2.new(1, -72, 0, 18),
-	Position = UDim2.new(0, 66, 0, 34),
+	Size = UDim2.new(1, -54, 0, 15),
+	Position = UDim2.new(0, 50, 0, 26),
 	BackgroundTransparency = 1,
 	Text = "ONLINE // READY",
 	TextColor3 = COLORS.Accent,
-	TextSize = 11,
+	TextSize = 9,
 	Font = Enum.Font.GothamMedium,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	ZIndex = 5,
 })
 
 local nav = create("Frame", "Navigation", root, {
-	Size = UDim2.new(0.285, 0, 0, 324),
-	Position = UDim2.fromScale(0.055, 0.49),
+	Size = UDim2.new(0.30, 0, 0, 276),
+	Position = UDim2.fromScale(0.052, 0.525),
 	AnchorPoint = Vector2.new(0, 0.5),
 	BackgroundTransparency = 1,
 	ZIndex = 4,
 })
 create("UISizeConstraint", "NavSize", nav, {
-	MinSize = Vector2.new(250, 300),
-	MaxSize = Vector2.new(370, 344),
+	MinSize = Vector2.new(255, 260),
+	MaxSize = Vector2.new(390, 290),
 })
 create("UIListLayout", "List", nav, {
 	FillDirection = Enum.FillDirection.Vertical,
 	HorizontalAlignment = Enum.HorizontalAlignment.Left,
 	VerticalAlignment = Enum.VerticalAlignment.Top,
 	SortOrder = Enum.SortOrder.LayoutOrder,
-	Padding = UDim.new(0, 8),
+	Padding = UDim.new(0, 4),
 })
 
 local menuEntries = {
@@ -375,7 +578,7 @@ local sectionTweens = {}
 
 for index, entry in ipairs(menuEntries) do
 	local row = create("TextButton", entry.Key, nav, {
-		Size = UDim2.new(1, 0, 0, 52),
+		Size = UDim2.new(1, 0, 0, 48),
 		LayoutOrder = index,
 		BackgroundColor3 = COLORS.Panel,
 		BackgroundTransparency = 1,
@@ -396,26 +599,26 @@ for index, entry in ipairs(menuEntries) do
 	})
 
 	local numberLabel = create("TextLabel", "Number", row, {
-		Size = UDim2.new(0, 42, 1, 0),
-		Position = UDim2.new(0, 15, 0, 0),
+		Size = UDim2.new(0, 38, 1, 0),
+		Position = UDim2.new(0, 13, 0, 0),
 		BackgroundTransparency = 1,
 		Text = string.format("%02d", index),
 		TextColor3 = COLORS.Muted,
 		TextTransparency = 1,
-		TextSize = 11,
+		TextSize = 9,
 		Font = Enum.Font.GothamMedium,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ZIndex = 5,
 	})
 
 	local label = create("TextLabel", "Label", row, {
-		Size = UDim2.new(1, -68, 1, 0),
-		Position = UDim2.new(0, 58, 0, 0),
+		Size = UDim2.new(1, -62, 1, 0),
+		Position = UDim2.new(0, 52, 0, 0),
 		BackgroundTransparency = 1,
 		Text = entry.Label,
 		TextColor3 = COLORS.Text,
 		TextTransparency = 1,
-		TextSize = 20,
+		TextSize = 19,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ZIndex = 5,
@@ -432,7 +635,7 @@ end
 
 local description = create("TextLabel", "Description", root, {
 	Size = UDim2.new(0.38, 0, 0, 52),
-	Position = UDim2.fromScale(0.055, 0.765),
+	Position = UDim2.fromScale(0.052, 0.755),
 	BackgroundTransparency = 1,
 	Text = menuEntries[1].Description,
 	TextColor3 = COLORS.Muted,
@@ -650,18 +853,21 @@ RunService:BindToRenderStep(cameraBindName, Enum.RenderPriority.Camera.Value + 1
 	local xRatio = viewport.X > 0 and (mouse.X / viewport.X - 0.5) or 0
 	local yRatio = viewport.Y > 0 and (mouse.Y / viewport.Y - 0.5) or 0
 
-	local position = Vector3.new(
-		math.sin(t * 0.085) * 5.5,
-		2054 + math.sin(t * 0.055) * 1.6,
-		-112 + math.cos(t * 0.07) * 2.8
+	-- Lower, slower framing: foreground rock silhouettes occupy the bottom edge,
+	-- while the relay and skyline sit in the middle distance. Mouse parallax is
+	-- deliberately restrained so the scene feels cinematic instead of floaty.
+	local position = MENU_ORIGIN + Vector3.new(
+		math.sin(t * 0.072) * 3.6,
+		52 + math.sin(t * 0.05) * 1.15,
+		-138 + math.cos(t * 0.06) * 2.0
 	)
-	local target = Vector3.new(
-		xRatio * 8 + math.sin(t * 0.04) * 5,
-		2026 - yRatio * 4,
-		135
+	local target = MENU_ORIGIN + Vector3.new(
+		xRatio * 5.5 + math.sin(t * 0.035) * 3.2,
+		34 - yRatio * 2.7,
+		166
 	)
 	camera.CFrame = CFrame.lookAt(position, target)
-	camera.FieldOfView = 67
+	camera.FieldOfView = 61
 
 	for _, object in ipairs(sceneFolder:GetChildren()) do
 		local baseObjectY = object:GetAttribute("MenuBaseY")
@@ -677,6 +883,7 @@ local function restoreWorldPresentation()
 	menuOwnsControls = false
 	ContextActionService:UnbindAction("ByteforceMainMenuInput")
 	RunService:UnbindFromRenderStep(cameraBindName)
+	restoreCharacterVisibility()
 	if sceneFolder and sceneFolder.Parent then sceneFolder:Destroy() end
 	if bloom and bloom.Parent then bloom:Destroy() end
 	if colorGrade and colorGrade.Parent then colorGrade:Destroy() end
@@ -714,12 +921,13 @@ local function enterLobby()
 	fade.Completed:Wait()
 
 	restoreWorldPresentation()
-
-	local character = player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	camera.CameraType = Enum.CameraType.Custom
-	if humanoid then camera.CameraSubject = humanoid end
-	camera.FieldOfView = 70
+	-- Lobby presentation takes ownership immediately after the menu. Keep the
+	-- camera scriptable and keep PlayerModule controls disabled so there is no
+	-- one-frame gap where the avatar can move between front-end states.
+	if menuControls then
+		pcall(function() menuControls:Disable() end)
+	end
+	camera.CameraType = Enum.CameraType.Scriptable
 
 	player:SetAttribute("MainMenuDismissed", true)
 	RunService.RenderStepped:Wait()

@@ -27,6 +27,8 @@ local completeTutorialRemote = getOrCreate("RemoteEvent", "CompleteTutorialRemot
 
 local gameStartedVal = getOrCreate("BoolValue", "GameStarted", ReplicatedStorage)
 gameStartedVal.Value = false
+local lobbyPhaseVal = getOrCreate("StringValue", "LobbyPhase", ReplicatedStorage)
+lobbyPhaseVal.Value = "LOBBY"
 
 local chargeVal = getOrCreate("IntValue", "TeleporterCharge", ReplicatedStorage)
 chargeVal.Value = 0
@@ -104,42 +106,68 @@ local function disableStageSpawns()
 end
 disableStageSpawns()
 
-local function giveClassWeaponAndHighlight(player, className)
+local function giveClassWeaponAndHighlight(player, className, gameplayEnabled, refreshTools)
 	local char = player.Character
 	if not char or not char:FindFirstChildOfClass("Humanoid") then return end
 	local hum = char:FindFirstChildOfClass("Humanoid")
+	local rootPart = char:FindFirstChild("HumanoidRootPart")
 
-	player.Backpack:ClearAllChildren()
-	for _, item in ipairs(char:GetChildren()) do
-		if item:IsA("Tool") then item:Destroy() end
+	-- Tool teardown is intentionally skipped for ordinary survivor switches.
+	-- Entering the showcase already clears the player's tools once; destroying
+	-- them again on every class click can fire equip/unequip presentation audio.
+	if refreshTools ~= false then
+		player.Backpack:ClearAllChildren()
+		for _, item in ipairs(char:GetChildren()) do
+			if item:IsA("Tool") then item:Destroy() end
+		end
 	end
 
 	local toolName = "LaserGun"
 	local highlightColor = Color3.fromRGB(0, 200, 255)
+	local moveSpeed = 16
+	local maxHealth = 100
 
 	if className == "Ranger" then
 		toolName = "RangerWeapon"
-		hum.MaxHealth = 90
-		hum.Health = 90
-		hum.WalkSpeed = 20
+		maxHealth = 90
+		moveSpeed = 20
 		highlightColor = Color3.fromRGB(0, 255, 120)
 	elseif className == "Brawler" then
 		toolName = "BrawlerWeapon"
-		hum.MaxHealth = 150
-		hum.Health = 150
-		hum.WalkSpeed = 18
+		maxHealth = 150
+		moveSpeed = 18
 		highlightColor = Color3.fromRGB(255, 120, 0)
 	elseif className == "Weaver" then
 		toolName = "WeaverWeapon"
-		hum.MaxHealth = 100
-		hum.Health = 100
-		hum.WalkSpeed = 18
+		maxHealth = 100
+		moveSpeed = 18
 		highlightColor = Color3.fromRGB(180, 0, 255)
 	else
 		toolName = "LaserGun"
-		hum.MaxHealth = 100
-		hum.Health = 100
-		hum.WalkSpeed = 16
+		maxHealth = 100
+		moveSpeed = 16
+	end
+
+	-- Survivor select is presentation-only. Keep the real character completely
+	-- stationary even if client controls briefly re-enable or a class swap races
+	-- with the UI transition. Gameplay movement is restored only when the run starts.
+	if gameplayEnabled == true then
+		hum.MaxHealth = maxHealth
+		hum.Health = maxHealth
+		hum.WalkSpeed = moveSpeed
+		hum.JumpHeight = 7.2
+		hum.JumpPower = 50
+		hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+	else
+		hum.WalkSpeed = 0
+		hum.JumpHeight = 0
+		hum.JumpPower = 0
+		hum.Jump = false
+		hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+		if rootPart then
+			rootPart.AssemblyLinearVelocity = Vector3.zero
+			rootPart.AssemblyAngularVelocity = Vector3.zero
+		end
 	end
 
 	local highlight = char:FindFirstChildOfClass("Highlight") or Instance.new("Highlight")
@@ -148,15 +176,65 @@ local function giveClassWeaponAndHighlight(player, className)
 	highlight.OutlineColor = highlightColor
 	highlight.Parent = char
 
-	local toolTemplate = StarterPack:FindFirstChild(toolName) or ReplicatedStorage:FindFirstChild(toolName)
-	if toolTemplate then
-		toolTemplate:Clone().Parent = player.Backpack
-	end
+	if gameplayEnabled == true then
+		local toolTemplate = StarterPack:FindFirstChild(toolName) or ReplicatedStorage:FindFirstChild(toolName)
+		if toolTemplate then
+			local clone = toolTemplate:Clone()
+			clone.Enabled = true
+			clone.Parent = player.Backpack
+		end
 
-	task.delay(0.1, function()
-		local tool = player.Backpack:FindFirstChildOfClass("Tool")
-		if tool and hum then hum:EquipTool(tool) end
-	end)
+		task.delay(0.1, function()
+			local tool = player.Backpack:FindFirstChildOfClass("Tool")
+			if tool and hum then
+				tool.Enabled = true
+				hum:EquipTool(tool)
+			end
+		end)
+	end
+end
+
+local function clearClassPresentation(player)
+	player.Backpack:ClearAllChildren()
+	if player.Character then
+		for _, item in ipairs(player.Character:GetChildren()) do
+			if item:IsA("Tool") or item:IsA("Highlight") then item:Destroy() end
+		end
+	end
+end
+
+local function movePlayersToShowcase()
+	local lobbyPlayers = Players:GetPlayers()
+	local count = #lobbyPlayers
+	for index, p in ipairs(lobbyPlayers) do
+		p:SetAttribute("ShowcaseConfirmed", false)
+		if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local xOffset = (index - ((count + 1) / 2)) * 6
+			local position = Vector3.new(xOffset, 2005, 50)
+			p.Character:PivotTo(CFrame.lookAt(position, position + Vector3.new(0, 0, -12)))
+			giveClassWeaponAndHighlight(p, p:GetAttribute("SelectedClass") or "Gunner", false)
+		end
+	end
+end
+
+local function allPlayersReady(excludedPlayer)
+	local currentPlayers = Players:GetPlayers()
+	local considered = 0
+	for _, p in ipairs(currentPlayers) do
+		if p ~= excludedPlayer then
+			considered += 1
+			if p:GetAttribute("IsReady") ~= true then return false end
+		end
+	end
+	return considered > 0
+end
+
+local function beginSurvivorSelect(excludedPlayer)
+	if lobbyPhaseVal.Value ~= "LOBBY" or gameStartedVal.Value then return end
+	if not allPlayersReady(excludedPlayer) then return end
+	lobbyPhaseVal.Value = "SURVIVOR_SELECT"
+	movePlayersToShowcase()
+	showcaseRemote:FireAllClients()
 end
 
 local function resetPlayerStats(player)
@@ -170,12 +248,14 @@ local function resetPlayerStats(player)
 	end
 	local buffs = player:FindFirstChild("Buffs")
 	if buffs then buffs:ClearAllChildren() end
-	if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
-		local hum = player.Character:FindFirstChildOfClass("Humanoid")
-		hum.WalkSpeed = 16
-		hum.JumpHeight = 7.2
-		hum.Health = hum.MaxHealth
-	end
+		if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
+			local hum = player.Character:FindFirstChildOfClass("Humanoid")
+			hum.WalkSpeed = 16
+			hum.JumpHeight = 7.2
+			hum.JumpPower = 50
+			hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+			hum.Health = hum.MaxHealth
+		end
 end
 
 -- GUARANTEED TELEPORT: WAITS FOR HUMANOIDROOTPART INSTEAD OF GUESSING TIME
@@ -184,8 +264,18 @@ local function onCharacterAdded(player, character)
 		task.spawn(function()
 			local root = character:WaitForChild("HumanoidRootPart", 10)
 			if root and not gameStartedVal.Value then
-				root.CFrame = CFrame.new(0, 2006, 0)
-				giveClassWeaponAndHighlight(player, player:GetAttribute("SelectedClass") or "Gunner")
+				if lobbyPhaseVal.Value == "SURVIVOR_SELECT" then
+					local playersNow = Players:GetPlayers()
+					local index = table.find(playersNow, player) or #playersNow
+					local count = math.max(#playersNow, 1)
+					local xOffset = (index - ((count + 1) / 2)) * 6
+					local position = Vector3.new(xOffset, 2005, 50)
+					character:PivotTo(CFrame.lookAt(position, position + Vector3.new(0, 0, -12)))
+					giveClassWeaponAndHighlight(player, player:GetAttribute("SelectedClass") or "Gunner", false)
+				else
+					root.CFrame = CFrame.new(0, 2006, 0)
+					clearClassPresentation(player)
+				end
 			end
 		end)
 	end
@@ -212,20 +302,26 @@ for _, p in ipairs(Players:GetPlayers()) do
 end
 
 selectClassRemote.OnServerEvent:Connect(function(player, className)
-	if not gameStartedVal.Value then
+	if lobbyPhaseVal.Value == "SURVIVOR_SELECT" and not gameStartedVal.Value and player:GetAttribute("ShowcaseConfirmed") ~= true then
+		if className ~= "Gunner" and className ~= "Ranger" and className ~= "Brawler" and className ~= "Weaver" then return end
 		player:SetAttribute("SelectedClass", className)
-		giveClassWeaponAndHighlight(player, className)
+		player:SetAttribute("ShowcaseConfirmed", false)
+		-- The showcase has no active weapon. Only update stats/highlight here;
+		-- do not repeatedly destroy tools, which was producing the switch sound.
+		giveClassWeaponAndHighlight(player, className, false, false)
 	end
 end)
 
 toggleReadyRemote.OnServerEvent:Connect(function(player)
-	if not gameStartedVal.Value then
+	if lobbyPhaseVal.Value == "LOBBY" and not gameStartedVal.Value then
 		player:SetAttribute("IsReady", not (player:GetAttribute("IsReady") or false))
+		beginSurvivorSelect()
 	end
 end)
 
 local function returnAllToLobby()
 	gameStartedVal.Value = false
+	lobbyPhaseVal.Value = "LOBBY"
 	chargeVal.Value = 0
 	activeVal.Value = false
 	completeVal.Value = false
@@ -236,7 +332,7 @@ local function returnAllToLobby()
 		if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
 			p.Character:PivotTo(CFrame.new(0, 2006, 0))
 		end
-		giveClassWeaponAndHighlight(p, p:GetAttribute("SelectedClass") or "Gunner")
+		clearClassPresentation(p)
 	end
 
 	if Workspace:FindFirstChild("ActiveTeleporter") then Workspace.ActiveTeleporter:Destroy() end
@@ -249,8 +345,6 @@ returnLobbyRemote.OnServerEvent:Connect(returnAllToLobby)
 
 playAgainRemote.OnServerEvent:Connect(function(player)
 	returnAllToLobby()
-	task.wait(0.5)
-	showcaseRemote:FireAllClients()
 end)
 
 local function findStage1Spawn()
@@ -260,90 +354,102 @@ local function findStage1Spawn()
 	return spawn
 end
 
-confirmDeployRemote.OnServerEvent:Connect(function(player)
-	player:SetAttribute("ShowcaseConfirmed", true)
-	local allConfirmed = true
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p:GetAttribute("ShowcaseConfirmed") == false then
-			allConfirmed = false
-			break
+local function tryStartRun(excludedPlayer)
+	if lobbyPhaseVal.Value ~= "SURVIVOR_SELECT" or gameStartedVal.Value then return end
+	local currentPlayers = Players:GetPlayers()
+	local considered = 0
+	for _, p in ipairs(currentPlayers) do
+		if p ~= excludedPlayer then
+			considered += 1
+			if p:GetAttribute("ShowcaseConfirmed") ~= true then return end
+		end
+	end
+	if considered == 0 then return end
+
+	lobbyPhaseVal.Value = "RUN"
+	gameStartedVal.Value = true
+	local stage1Spawn = findStage1Spawn()
+	if stage1Spawn and stage1Spawn:IsA("SpawnLocation") then
+		stage1Spawn.Enabled = true
+	end
+
+	local targetCFrame = stage1Spawn and (stage1Spawn.CFrame + Vector3.new(0, 1, 0)) or CFrame.new(0, 15, 0)
+
+	local podFloor = Instance.new("Part")
+	podFloor.Name = "DropPodFloor"
+	podFloor.Size = Vector3.new(8, 1, 8)
+	podFloor.CFrame = targetCFrame
+	podFloor.BrickColor = BrickColor.new("Dark stone grey")
+	podFloor.Material = Enum.Material.Metal
+	podFloor.Anchored = true
+	podFloor.CanCollide = true
+	podFloor.Parent = Workspace
+
+	local podShell = Instance.new("Part")
+	podShell.Name = "DropPodShell"
+	podShell.Size = Vector3.new(8, 9, 8)
+	podShell.CFrame = targetCFrame + Vector3.new(0, 4.5, 0)
+	podShell.BrickColor = BrickColor.new("Really black")
+	podShell.Material = Enum.Material.Glass
+	podShell.Transparency = 0.4
+	podShell.Anchored = true
+	podShell.CanCollide = false
+	podShell.Parent = Workspace
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ObjectText = "Drop Pod"
+	prompt.ActionText = "Open Pod Hatch (Hold E)"
+	prompt.HoldDuration = 0.6
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = podFloor
+
+	for _, p in ipairs(currentPlayers) do
+		local selectedCls = p:GetAttribute("SelectedClass") or "Gunner"
+		giveClassWeaponAndHighlight(p, selectedCls, true)
+		if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			p.Character:PivotTo(targetCFrame + Vector3.new(0, 3, 0))
 		end
 	end
 
-	if allConfirmed and not gameStartedVal.Value then
-		gameStartedVal.Value = true
-		local stage1Spawn = findStage1Spawn()
-		if stage1Spawn and stage1Spawn:IsA("SpawnLocation") then
-			stage1Spawn.Enabled = true
-		end
-
-		local targetCFrame = stage1Spawn and (stage1Spawn.CFrame + Vector3.new(0, 1, 0)) or CFrame.new(0, 15, 0)
-
-		local podFloor = Instance.new("Part")
-		podFloor.Name = "DropPodFloor"
-		podFloor.Size = Vector3.new(8, 1, 8)
-		podFloor.CFrame = targetCFrame
-		podFloor.BrickColor = BrickColor.new("Dark stone grey")
-		podFloor.Material = Enum.Material.Metal
-		podFloor.Anchored = true
-		podFloor.CanCollide = true
-		podFloor.Parent = Workspace
-
-		local podShell = Instance.new("Part")
-		podShell.Name = "DropPodShell"
-		podShell.Size = Vector3.new(8, 9, 8)
-		podShell.CFrame = targetCFrame + Vector3.new(0, 4.5, 0)
-		podShell.BrickColor = BrickColor.new("Really black")
-		podShell.Material = Enum.Material.Glass
-		podShell.Transparency = 0.4
-		podShell.Anchored = true
-		podShell.CanCollide = false
-		podShell.Parent = Workspace
-
-		local prompt = Instance.new("ProximityPrompt")
-		prompt.ObjectText = "Drop Pod"
-		prompt.ActionText = "Open Pod Hatch (Hold E)"
-		prompt.HoldDuration = 0.6
-		prompt.RequiresLineOfSight = false
-		prompt.Parent = podFloor
-
-		for _, p in ipairs(Players:GetPlayers()) do
-			local selectedCls = p:GetAttribute("SelectedClass") or "Gunner"
-			giveClassWeaponAndHighlight(p, selectedCls)
-			if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-				p.Character:PivotTo(targetCFrame + Vector3.new(0, 3, 0))
+	prompt.Triggered:Connect(function(triggerPlayer)
+		prompt.Enabled = false
+		local sound = Instance.new("Sound")
+		sound.SoundId = "rbxassetid://130113322"
+		sound.Volume = 0.8
+		sound.Parent = podFloor
+		sound:Play()
+		task.spawn(function()
+			for i = 1, 10 do
+				podShell.Transparency = 0.4 + (i / 10 * 0.6)
+				podFloor.Transparency = i / 10
+				task.wait(0.04)
 			end
-		end
-
-		prompt.Triggered:Connect(function(triggerPlayer)
-			prompt.Enabled = false
-			local sound = Instance.new("Sound")
-			sound.SoundId = "rbxassetid://130113322"
-			sound.Volume = 0.8
-			sound.Parent = podFloor
-			sound:Play()
-			task.spawn(function()
-				for i = 1, 10 do
-					podShell.Transparency = 0.4 + (i / 10 * 0.6)
-					podFloor.Transparency = i / 10
-					task.wait(0.04)
-				end
-				podShell:Destroy()
-				podFloor:Destroy()
-			end)
+			podShell:Destroy()
+			podFloor:Destroy()
 		end)
-	end
+	end)
+end
+
+confirmDeployRemote.OnServerEvent:Connect(function(player)
+	if lobbyPhaseVal.Value ~= "SURVIVOR_SELECT" or gameStartedVal.Value then return end
+	player:SetAttribute("ShowcaseConfirmed", true)
+	tryStartRun()
 end)
 
 startGameRemote.OnServerEvent:Connect(function(player)
-	if gameStartedVal.Value then return end
-	for _, p in ipairs(Players:GetPlayers()) do
-		p:SetAttribute("ShowcaseConfirmed", false)
-		if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-			p.Character:PivotTo(CFrame.new(0, 2005, 50))
+	-- Legacy remote retained so old clients do not error. Progression is automatic
+	-- once every connected player is ready in the LOBBY phase.
+	beginSurvivorSelect()
+end)
+
+Players.PlayerRemoving:Connect(function(leavingPlayer)
+	task.defer(function()
+		if lobbyPhaseVal.Value == "LOBBY" then
+			beginSurvivorSelect(leavingPlayer)
+		elseif lobbyPhaseVal.Value == "SURVIVOR_SELECT" and not gameStartedVal.Value then
+			tryStartRun(leavingPlayer)
 		end
-	end
-	showcaseRemote:FireAllClients()
+	end)
 end)
 
 print("SUCCESS: LobbyManager running with instantaneous client UI sync!")

@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 pcall(function()
 	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false)
@@ -8,279 +9,249 @@ pcall(function()
 end)
 
 local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
 local screenGui = script.Parent
-
 screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.DisplayOrder = math.max(screenGui.DisplayOrder, 20)
 screenGui.Enabled = false
 
-local function getOrCreate(className, name, parent, properties)
-	local item = parent:FindFirstChild(name)
-	if not item then item = Instance.new(className); item.Name = name; item.Parent = parent end
-	if properties then for k, v in pairs(properties) do item[k] = v end end
-	return item
-end
-
--- 1. CROSSHAIR
-getOrCreate("Frame", "Crosshair", screenGui, {
-	Size = UDim2.new(0, 6, 0, 6), Position = UDim2.new(0.5, -3, 0.5, -22),
-	BackgroundColor3 = Color3.fromRGB(0, 255, 120), BorderSizePixel = 1, BorderColor3 = Color3.fromRGB(0, 0, 0),
-	Visible = true
-})
-
--- 2. TIMER & GOLD HEADER
-local timerLabel = getOrCreate("TextLabel", "TimerLabel", screenGui, {
-	Size = UDim2.new(0, 600, 0, 30), Position = UDim2.new(0.5, -300, 0, 5),
-	BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = "TIME: 00:00 | THREAT: EASY | GOLD: $0",
-	Visible = true
-})
-
--- 3. CUSTOM HEALTH BAR
-local healthBG = getOrCreate("Frame", "HealthBarBG", screenGui, {
-	Size = UDim2.new(0, 250, 0, 30), Position = UDim2.new(0, 20, 1, -50), BackgroundColor3 = Color3.fromRGB(40, 40, 40), BorderSizePixel = 2,
-	Visible = true
-})
-local healthFill = getOrCreate("Frame", "HealthBarFill", healthBG, {Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(0, 220, 100), BorderSizePixel = 0})
-local hpLabel = getOrCreate("TextLabel", "HPLabel", healthBG, {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = "100 / 100 HP", ZIndex = 2})
-
--- 4. ABILITY BAR (Bottom Right)
-local abilityBar = getOrCreate("Frame", "AbilityBar", screenGui, {
-	Size = UDim2.new(0, 320, 0, 65), Position = UDim2.new(1, -340, 1, -80), BackgroundTransparency = 1,
-	Visible = true
-})
-
-local CLASS_SKILLS = {
-	Gunner  = {M1 = "LASER",  M2 = "HEAVY",  Shift = "DASH",  R = "STRIKE"},
-	Ranger  = {M1 = "ARROW",  M2 = "PIERCE", Shift = "BLINK", R = "RAIN"},
-	Brawler = {M1 = "FISTS",  M2 = "PALM",   Shift = "FLASH", R = "SLAM"},
-	Weaver  = {M1 = "WEB",    M2 = "SNARE",  Shift = "ZIP",   R = "SLAM"}
+local C = {
+	Ink = Color3.fromRGB(7, 11, 16), Panel = Color3.fromRGB(19, 28, 36),
+	PanelSoft = Color3.fromRGB(31, 43, 52), Text = Color3.fromRGB(231, 240, 243),
+	Muted = Color3.fromRGB(122, 143, 151), Accent = Color3.fromRGB(132, 207, 226),
+	AccentSoft = Color3.fromRGB(74, 124, 137), Health = Color3.fromRGB(171, 215, 185),
+	Warning = Color3.fromRGB(224, 191, 115), Danger = Color3.fromRGB(219, 112, 104),
 }
 
-local skills = {{Key="M1"}, {Key="M2"}, {Key="SHIFT"}, {Key="R"}}
-for i, skill in ipairs(skills) do
-	local box = getOrCreate("Frame", "Skill_" .. skill.Key, abilityBar, {Size = UDim2.new(0, 70, 0, 60), Position = UDim2.new(0, (i - 1) * 80, 0, 0), BackgroundColor3 = Color3.fromRGB(30, 30, 30), BorderSizePixel = 2, BorderColor3 = Color3.fromRGB(255, 255, 255)})
-	getOrCreate("TextLabel", "KeyLabel", box, {Size=UDim2.new(1,0,0.4,0), BackgroundTransparency=1, TextColor3=Color3.fromRGB(255,255,100), TextScaled=true, Font=Enum.Font.SourceSansBold, Text=skill.Key})
-	getOrCreate("TextLabel", "NameLabel", box, {Size=UDim2.new(1,0,0.5,0), Position=UDim2.new(0,0,0.4,0), BackgroundTransparency=1, TextColor3=Color3.fromRGB(255,255,255), TextScaled=true, Font=Enum.Font.SourceSans, Text=""})
-	getOrCreate("TextLabel", "CooldownLabel", box, {Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.fromRGB(0,0,0), BackgroundTransparency=0.5, TextColor3=Color3.fromRGB(255,80,80), TextScaled=true, Font=Enum.Font.SourceSansBold, Text="", Visible=false, ZIndex=3})
+local function make(className, name, parent, props)
+	local old = parent:FindFirstChild(name)
+	if old then old:Destroy() end
+	local obj = Instance.new(className); obj.Name = name
+	for k, v in pairs(props or {}) do obj[k] = v end
+	obj.Parent = parent
+	return obj
 end
 
--- 5. BUFFS / ITEMS LIST (Middle Left)
-local buffsPanel = getOrCreate("Frame", "BuffsPanel", screenGui, {
-	Size = UDim2.new(0, 230, 0, 160), Position = UDim2.new(0, 20, 0.45, 0), BackgroundColor3 = Color3.fromRGB(15, 15, 15), BackgroundTransparency = 0.4, BorderSizePixel = 2, BorderColor3 = Color3.fromRGB(0, 180, 255),
-	Visible = true
-})
-getOrCreate("TextLabel", "BuffsTitle", buffsPanel, {Size = UDim2.new(1, 0, 0, 25), BackgroundColor3 = Color3.fromRGB(0, 100, 180), TextColor3 = Color3.fromRGB(255, 255, 255), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = "ACQUIRED ITEMS"})
-local buffsListLabel = getOrCreate("TextLabel", "BuffsList", buffsPanel, {Size = UDim2.new(1, -10, 1, -30), Position = UDim2.new(0, 5, 0, 28), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(200, 240, 255), TextSize = 13, Font = Enum.Font.SourceSansBold, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Text = "No items collected."})
-
--- 6. TELEPORTER PANEL & BOSS BAR
-local teleporterPanel = getOrCreate("Frame", "TeleporterPanel", screenGui, {
-	Size = UDim2.new(0, 450, 0, 35), Position = UDim2.new(0.5, -225, 0, 68), BackgroundColor3 = Color3.fromRGB(20, 20, 20), BackgroundTransparency = 0.3, BorderSizePixel = 2, BorderColor3 = Color3.fromRGB(255, 220, 50), Visible = false
-})
-local teleporterLabel = getOrCreate("TextLabel", "TeleporterLabel", teleporterPanel, {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 230, 80), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = ""})
-
-local bossBarBG = getOrCreate("Frame", "BossBarBG", screenGui, {
-	Size = UDim2.new(0, 450, 0, 25), Position = UDim2.new(0.5, -225, 0, 38), BackgroundColor3 = Color3.fromRGB(40, 0, 0), BorderSizePixel = 2, BorderColor3 = Color3.fromRGB(255, 0, 0), Visible = false
-})
-local bossBarFill = getOrCreate("Frame", "BossBarFill", bossBarBG, {Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(220, 0, 0), BorderSizePixel = 0})
-local bossLabel = getOrCreate("TextLabel", "BossLabel", bossBarBG, {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = "MALWARE OVERLORD - 800 / 800 HP", ZIndex = 2})
-
--- 7. END-OF-RUN STATS SCREEN
-local statsFrame = getOrCreate("Frame", "StatsFrame", screenGui, {
-	Size = UDim2.new(0, 680, 0, 400), Position = UDim2.new(0.5, -340, 0.5, -200), BackgroundColor3 = Color3.fromRGB(15, 18, 24), BorderSizePixel = 3, BorderColor3 = Color3.fromRGB(255, 50, 50), Visible = false, ZIndex = 10
-})
-getOrCreate("TextLabel", "StatsTitle", statsFrame, {Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = Color3.fromRGB(180, 40, 40), TextColor3 = Color3.fromRGB(255, 255, 255), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = "RUN OVER - TEAM DEFEATED", ZIndex = 11})
-local statsContainer = getOrCreate("Frame", "StatsContainer", statsFrame, {Size = UDim2.new(1, -30, 0, 280), Position = UDim2.new(0, 15, 0, 50), BackgroundTransparency = 1, ZIndex = 11})
-local returnBtn = getOrCreate("TextButton", "ReturnBtn", statsFrame, {Size = UDim2.new(0, 240, 0, 45), Position = UDim2.new(0.5, -120, 1, -55), BackgroundColor3 = Color3.fromRGB(0, 180, 80), TextColor3 = Color3.fromRGB(255, 255, 255), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = "RETURN TO LOBBY ▶", ZIndex = 12})
-
--- 8. ITEM PICKUP BANNER
-local pickupBanner = getOrCreate("Frame", "PickupBanner", screenGui, {
-	Size = UDim2.new(0, 280, 0, 60), Position = UDim2.new(0, -300, 0.3, 0), BackgroundColor3 = Color3.fromRGB(15, 15, 20), BackgroundTransparency = 0.2, BorderSizePixel = 3, BorderColor3 = Color3.fromRGB(255, 255, 255), Visible = false
-})
-local bannerHeader = getOrCreate("TextLabel", "BannerHeader", pickupBanner, {Size = UDim2.new(1, -10, 0, 25), Position = UDim2.new(0, 5, 0, 2), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), TextScaled = true, Font = Enum.Font.SourceSansBold, Text = ""})
-local bannerDesc = getOrCreate("TextLabel", "BannerDesc", pickupBanner, {Size = UDim2.new(1, -10, 0, 25), Position = UDim2.new(0, 5, 0, 28), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(200, 200, 200), TextScaled = true, Font = Enum.Font.SourceSans, Text = ""})
-
--- REMOTES & VALUES
-local itemRemote = ReplicatedStorage:FindFirstChild("ItemAcquiredRemote") or ReplicatedStorage:WaitForChild("ItemAcquiredRemote", 5)
-local returnLobbyRemote = ReplicatedStorage:FindFirstChild("ReturnLobbyRemote") or ReplicatedStorage:WaitForChild("ReturnLobbyRemote", 5)
-local elapsedTimeVal = ReplicatedStorage:FindFirstChild("ElapsedTime") or ReplicatedStorage:WaitForChild("ElapsedTime", 5)
-local threatTextVal = ReplicatedStorage:FindFirstChild("ThreatText") or ReplicatedStorage:WaitForChild("ThreatText", 5)
-local chargeVal = ReplicatedStorage:FindFirstChild("TeleporterCharge") or ReplicatedStorage:WaitForChild("TeleporterCharge", 5)
-local activeVal = ReplicatedStorage:FindFirstChild("TeleporterActive") or ReplicatedStorage:WaitForChild("TeleporterActive", 5)
-local gameStartedVal = ReplicatedStorage:FindFirstChild("GameStarted") or ReplicatedStorage:WaitForChild("GameStarted", 5)
-
-if itemRemote then
-	itemRemote.OnClientEvent:Connect(function(title, desc, rarity)
-		local colorMap = {Common=Color3.fromRGB(220,220,220), Uncommon=Color3.fromRGB(80,255,100), Rare=Color3.fromRGB(255,80,80)}
-		local borderColor = colorMap[rarity] or Color3.fromRGB(255,255,255)
-		pickupBanner.BorderColor3 = borderColor; bannerHeader.TextColor3 = borderColor; bannerHeader.Text = title:upper(); bannerDesc.Text = desc
-		pickupBanner.Visible = true; pickupBanner:TweenPosition(UDim2.new(0, 20, 0.3, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.3, true)
-		task.delay(3.5, function()
-			pickupBanner:TweenPosition(UDim2.new(0, -300, 0.3, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.3, true, function() pickupBanner.Visible = false end)
-		end)
-	end)
+local function stroke(parent, color, transparency, thickness)
+	return make("UIStroke", "Stroke", parent, {Color=color, Transparency=transparency or 0, Thickness=thickness or 1})
 end
+
+local function formatTime(sec)
+	return string.format("%02d:%02d", math.floor(sec / 60), sec % 60)
+end
+
+local CLASS_SKILLS = {
+	Gunner={M1="LASER",M2="HEAVY",Shift="DASH",R="STRIKE"},
+	Ranger={M1="ARROW",M2="PIERCE",Shift="BLINK",R="RAIN"},
+	Brawler={M1="FISTS",M2="PALM",Shift="FLASH",R="SLAM"},
+	Weaver={M1="WEB",M2="SNARE",Shift="ZIP",R="SLAM"},
+}
+
+local itemRemote = ReplicatedStorage:FindFirstChild("ItemAcquiredRemote") or ReplicatedStorage:WaitForChild("ItemAcquiredRemote",5)
+local returnLobbyRemote = ReplicatedStorage:FindFirstChild("ReturnLobbyRemote") or ReplicatedStorage:WaitForChild("ReturnLobbyRemote",5)
+local elapsedTimeVal = ReplicatedStorage:FindFirstChild("ElapsedTime") or ReplicatedStorage:WaitForChild("ElapsedTime",5)
+local threatTextVal = ReplicatedStorage:FindFirstChild("ThreatText") or ReplicatedStorage:WaitForChild("ThreatText",5)
+local chargeVal = ReplicatedStorage:FindFirstChild("TeleporterCharge") or ReplicatedStorage:WaitForChild("TeleporterCharge",5)
+local activeVal = ReplicatedStorage:FindFirstChild("TeleporterActive") or ReplicatedStorage:WaitForChild("TeleporterActive",5)
+local gameStartedVal = ReplicatedStorage:FindFirstChild("GameStarted") or ReplicatedStorage:WaitForChild("GameStarted",5)
+
+-- Small neutral reticle: visible enough to aim without becoming the visual focus.
+local crosshair = make("Frame","Crosshair",screenGui,{Size=UDim2.new(0,4,0,4),Position=UDim2.new(.5,-2,.5,-2),BackgroundColor3=C.Text,BackgroundTransparency=.12,BorderSizePixel=0,ZIndex=10})
+make("UICorner","Corner",crosshair,{CornerRadius=UDim.new(1,0)})
+stroke(crosshair,Color3.fromRGB(10,15,20),.25,1)
+
+-- Currency lives alone instead of being buried inside a sentence of run data.
+local currencyPanel = make("Frame","CurrencyPanel",screenGui,{Size=UDim2.new(0,180,0,42),Position=UDim2.new(0,22,0,20),BackgroundColor3=C.Ink,BackgroundTransparency=.34,BorderSizePixel=0,ZIndex=4})
+stroke(currencyPanel,C.AccentSoft,.7,1)
+local goldLabel = make("TextLabel","GoldLabel",currencyPanel,{Size=UDim2.new(1,-20,1,0),Position=UDim2.new(0,10,0,0),BackgroundTransparency=1,Text="$0",TextColor3=C.Text,TextSize=18,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=5})
+
+-- RoR2-style run info cluster: time/difficulty/objective kept compact in one corner.
+local runInfo = make("Frame","RunInfo",screenGui,{Size=UDim2.new(0,290,0,84),Position=UDim2.new(1,-312,0,20),BackgroundColor3=C.Ink,BackgroundTransparency=.26,BorderSizePixel=0,ZIndex=4})
+stroke(runInfo,C.AccentSoft,.65,1)
+local timerLabel = make("TextLabel","TimerLabel",runInfo,{Size=UDim2.new(.58,-8,0,32),Position=UDim2.new(0,12,0,8),BackgroundTransparency=1,Text="00:00",TextColor3=C.Text,TextSize=22,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=5})
+local threatLabel = make("TextLabel","ThreatLabel",runInfo,{Size=UDim2.new(.42,-12,0,26),Position=UDim2.new(.58,0,0,10),BackgroundColor3=C.PanelSoft,BackgroundTransparency=.08,BorderSizePixel=0,Text="EASY",TextColor3=C.Accent,TextSize=11,Font=Enum.Font.GothamBold,ZIndex=5})
+local objectiveLabel = make("TextLabel","ObjectiveLabel",runInfo,{Size=UDim2.new(1,-24,0,30),Position=UDim2.new(0,12,0,45),BackgroundTransparency=1,Text="FIND AND ACTIVATE THE TELEPORTER",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,ZIndex=5})
+
+-- Item list remains readable but no longer occupies a large middle-left dashboard.
+local buffsPanel = make("Frame","BuffsPanel",screenGui,{Size=UDim2.new(0,300,0,118),Position=UDim2.new(0,22,0,72),BackgroundColor3=C.Ink,BackgroundTransparency=.58,BorderSizePixel=0,ZIndex=3})
+local buffsTitle = make("TextLabel","BuffsTitle",buffsPanel,{Size=UDim2.new(1,0,0,18),BackgroundTransparency=1,Text="ITEMS",TextColor3=C.Accent,TextSize=10,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=4})
+local buffsListLabel = make("TextLabel","BuffsList",buffsPanel,{Size=UDim2.new(1,0,1,-20),Position=UDim2.new(0,0,0,20),BackgroundTransparency=1,Text="NO ITEMS",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,TextWrapped=true,ZIndex=4})
+
+-- Health anchors the lower-left without a large saturated green block.
+local healthBG = make("Frame","HealthBarBG",screenGui,{Size=UDim2.new(0,320,0,38),Position=UDim2.new(0,22,1,-62),BackgroundColor3=C.Ink,BackgroundTransparency=.18,BorderSizePixel=0,ZIndex=5})
+stroke(healthBG,C.AccentSoft,.58,1)
+local healthTrack = make("Frame","HealthTrack",healthBG,{Size=UDim2.new(1,-18,0,7),Position=UDim2.new(0,9,1,-14),BackgroundColor3=Color3.fromRGB(42,54,61),BorderSizePixel=0,ZIndex=6})
+local healthFill = make("Frame","HealthBarFill",healthTrack,{Size=UDim2.new(1,0,1,0),BackgroundColor3=C.Health,BorderSizePixel=0,ZIndex=7})
+local hpLabel = make("TextLabel","HPLabel",healthBG,{Size=UDim2.new(1,-18,0,20),Position=UDim2.new(0,9,0,4),BackgroundTransparency=1,Text="100 / 100",TextColor3=C.Text,TextSize=12,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=7})
+local classLabel = make("TextLabel","ClassLabel",healthBG,{Size=UDim2.new(.5,-9,0,20),Position=UDim2.new(.5,0,0,4),BackgroundTransparency=1,Text="GUNNER",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Right,ZIndex=7})
+
+-- IMPORTANT: AbilityBar, Skill_* and CooldownLabel names are integration API for weapon scripts.
+local abilityBar = make("Frame","AbilityBar",screenGui,{Size=UDim2.new(0,354,0,76),Position=UDim2.new(1,-380,1,-100),BackgroundTransparency=1,ZIndex=5})
+local skillKeys = {{id="M1",key="M1"},{id="M2",key="M2"},{id="SHIFT",key="SHIFT"},{id="R",key="R"}}
+for i, info in ipairs(skillKeys) do
+	local box = make("Frame","Skill_"..info.id,abilityBar,{Size=UDim2.new(0,80,0,72),Position=UDim2.new(0,(i-1)*90,0,0),BackgroundColor3=C.Panel,BackgroundTransparency=.08,BorderSizePixel=0,ZIndex=6})
+	stroke(box,C.AccentSoft,.5,1)
+	make("TextLabel","KeyLabel",box,{Size=UDim2.new(1,-10,0,18),Position=UDim2.new(0,5,0,5),BackgroundTransparency=1,Text=info.key,TextColor3=C.Accent,TextSize=9,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=7})
+	make("TextLabel","NameLabel",box,{Size=UDim2.new(1,-10,0,22),Position=UDim2.new(0,5,1,-27),BackgroundTransparency=1,Text="",TextColor3=C.Text,TextSize=10,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=7})
+	make("Frame","Glyph",box,{Size=UDim2.new(0,26,0,4),Position=UDim2.new(.5,-13,.5,-4),BackgroundColor3=C.AccentSoft,BackgroundTransparency=.22,BorderSizePixel=0,ZIndex=7})
+	make("TextLabel","CooldownLabel",box,{Size=UDim2.fromScale(1,1),BackgroundColor3=C.Ink,BackgroundTransparency=.15,Text="",TextColor3=C.Text,TextSize=18,Font=Enum.Font.GothamBold,Visible=false,ZIndex=9})
+end
+
+local teleporterPanel = make("Frame","TeleporterPanel",screenGui,{Size=UDim2.new(0,460,0,42),Position=UDim2.new(.5,-230,0,24),BackgroundColor3=C.Ink,BackgroundTransparency=.18,BorderSizePixel=0,Visible=false,ZIndex=6})
+stroke(teleporterPanel,C.Warning,.48,1)
+local teleporterLabel = make("TextLabel","TeleporterLabel",teleporterPanel,{Size=UDim2.new(1,-20,1,0),Position=UDim2.new(0,10,0,0),BackgroundTransparency=1,Text="",TextColor3=C.Warning,TextSize=12,Font=Enum.Font.GothamBold,ZIndex=7})
+
+local bossBarBG = make("Frame","BossBarBG",screenGui,{Size=UDim2.new(0,520,0,30),Position=UDim2.new(.5,-260,0,74),BackgroundColor3=C.Ink,BackgroundTransparency=.12,BorderSizePixel=0,Visible=false,ZIndex=6})
+stroke(bossBarBG,C.Danger,.35,1)
+local bossBarFill = make("Frame","BossBarFill",bossBarBG,{Size=UDim2.new(1,0,0,4),Position=UDim2.new(0,0,1,-4),BackgroundColor3=C.Danger,BorderSizePixel=0,ZIndex=7})
+local bossLabel = make("TextLabel","BossLabel",bossBarBG,{Size=UDim2.new(1,-16,1,-4),Position=UDim2.new(0,8,0,0),BackgroundTransparency=1,Text="MALWARE OVERLORD",TextColor3=C.Text,TextSize=11,Font=Enum.Font.GothamBold,ZIndex=7})
+
+local pickupBanner = make("Frame","PickupBanner",screenGui,{Size=UDim2.new(0,330,0,66),Position=UDim2.new(0,-350,.32,0),BackgroundColor3=C.Ink,BackgroundTransparency=.12,BorderSizePixel=0,Visible=false,ZIndex=8})
+stroke(pickupBanner,C.Accent,.45,1)
+local bannerHeader = make("TextLabel","BannerHeader",pickupBanner,{Size=UDim2.new(1,-22,0,24),Position=UDim2.new(0,11,0,8),BackgroundTransparency=1,Text="",TextColor3=C.Text,TextSize=13,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=9})
+local bannerDesc = make("TextLabel","BannerDesc",pickupBanner,{Size=UDim2.new(1,-22,0,24),Position=UDim2.new(0,11,0,32),BackgroundTransparency=1,Text="",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=9})
+
+local statsFrame = make("Frame","StatsFrame",screenGui,{Size=UDim2.new(0,700,0,420),Position=UDim2.new(.5,-350,.5,-210),BackgroundColor3=C.Ink,BackgroundTransparency=.04,BorderSizePixel=0,Visible=false,ZIndex=30})
+stroke(statsFrame,C.Danger,.28,1)
+local statsTitle = make("TextLabel","StatsTitle",statsFrame,{Size=UDim2.new(1,-36,0,64),Position=UDim2.new(0,18,0,14),BackgroundTransparency=1,Text="RUN TERMINATED",TextColor3=C.Text,TextSize=28,Font=Enum.Font.GothamBlack,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=31})
+local statsSubtitle = make("TextLabel","StatsSubtitle",statsFrame,{Size=UDim2.new(1,-36,0,22),Position=UDim2.new(0,18,0,65),BackgroundTransparency=1,Text="SQUAD STATUS // SECTOR-0",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=31})
+local statsContainer = make("Frame","StatsContainer",statsFrame,{Size=UDim2.new(1,-36,0,250),Position=UDim2.new(0,18,0,102),BackgroundTransparency=1,ZIndex=31})
+local returnBtn = make("TextButton","ReturnBtn",statsFrame,{Size=UDim2.new(0,250,0,46),Position=UDim2.new(1,-268,1,-58),BackgroundColor3=Color3.fromRGB(190,214,221),BorderSizePixel=0,Text="RETURN TO LOBBY",TextColor3=Color3.fromRGB(18,30,36),TextSize=13,Font=Enum.Font.GothamBold,ZIndex=32})
 
 local function updateAbilityBarNames()
-	local rawCls = player:GetAttribute("SelectedClass") or "Gunner"
-	local cls = string.upper(string.sub(rawCls, 1, 1)) .. string.lower(string.sub(rawCls, 2))
-	local names = CLASS_SKILLS[cls] or CLASS_SKILLS[rawCls] or CLASS_SKILLS.Gunner
-
-	local boxM1 = abilityBar:FindFirstChild("Skill_M1")
-	if boxM1 and boxM1:FindFirstChild("NameLabel") then boxM1.NameLabel.Text = tostring(names and names.M1 or "LASER") end
-	local boxM2 = abilityBar:FindFirstChild("Skill_M2")
-	if boxM2 and boxM2:FindFirstChild("NameLabel") then boxM2.NameLabel.Text = tostring(names and names.M2 or "HEAVY") end
-	local boxShift = abilityBar:FindFirstChild("Skill_SHIFT")
-	if boxShift and boxShift:FindFirstChild("NameLabel") then boxShift.NameLabel.Text = tostring(names and (names.Shift or names.SHIFT) or "DASH") end
-	local boxR = abilityBar:FindFirstChild("Skill_R")
-	if boxR and boxR:FindFirstChild("NameLabel") then boxR.NameLabel.Text = tostring(names and names.R or "STRIKE") end
-end
-
-local function renderEndStats()
-	for _, child in ipairs(statsContainer:GetChildren()) do child:Destroy() end
-	local sec = elapsedTimeVal and elapsedTimeVal.Value or 0
-	local timeString = string.format("%02d:%02d", math.floor(sec / 60), sec % 60)
-
-	for i, p in ipairs(Players:GetPlayers()) do
-		local card = Instance.new("Frame")
-		card.Size = UDim2.new(1, 0, 0, 60); card.Position = UDim2.new(0, 0, 0, (i - 1) * 65)
-		card.BackgroundColor3 = Color3.fromRGB(28, 32, 42); card.BorderSizePixel = 1; card.BorderColor3 = Color3.fromRGB(60, 65, 80); card.ZIndex = 11; card.Parent = statsContainer
-
-		local avatar = Instance.new("ImageLabel")
-		avatar.Size = UDim2.new(0, 50, 0, 50); avatar.Position = UDim2.new(0, 5, 0.5, -25)
-		avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. p.UserId .. "&w=150&h=150"; avatar.BackgroundTransparency = 1; avatar.ZIndex = 12; avatar.Parent = card
-
-		local cls = p:GetAttribute("SelectedClass") or "Gunner"
-		local kills = p:GetAttribute("Kills") or 0
-		local totalGold = p:GetAttribute("TotalGoldEarned") or 0
-		local itemTotal = 0
-		local buffsFolder = p:FindFirstChild("Buffs")
-		if buffsFolder then for _, item in ipairs(buffsFolder:GetChildren()) do itemTotal = itemTotal + item.Value end end
-
-		local info = Instance.new("TextLabel")
-		info.Size = UDim2.new(1, -65, 1, 0); info.Position = UDim2.new(0, 60, 0, 0); info.BackgroundTransparency = 1
-		info.TextColor3 = Color3.fromRGB(255, 255, 255); info.TextSize = 14; info.Font = Enum.Font.SourceSansBold
-		info.TextXAlignment = Enum.TextXAlignment.Left; info.ZIndex = 12
-		info.Text = p.Name .. " (" .. cls .. ")\n• Time: " .. timeString .. "  |  • Kills: " .. kills .. "  |  • Gold: $" .. totalGold .. "  |  • Items: " .. itemTotal
-		info.Parent = card
+	local raw = player:GetAttribute("SelectedClass") or "Gunner"
+	local cls = string.upper(string.sub(raw,1,1)) .. string.lower(string.sub(raw,2))
+	local names = CLASS_SKILLS[cls] or CLASS_SKILLS[raw] or CLASS_SKILLS.Gunner
+	local map = {M1=names.M1,M2=names.M2,SHIFT=names.Shift,R=names.R}
+	for id, name in pairs(map) do
+		local box=abilityBar:FindFirstChild("Skill_"..id)
+		if box and box:FindFirstChild("NameLabel") then box.NameLabel.Text=tostring(name or "") end
 	end
+	classLabel.Text=string.upper(raw)
 end
-
-returnBtn.MouseButton1Click:Connect(function()
-	statsFrame.Visible = false
-	if returnLobbyRemote then returnLobbyRemote:FireServer() end
-end)
-
-local function formatTime(sec) return string.format("%02d:%02d", math.floor(sec / 60), sec % 60) end
 
 local function updateHUDDisplay()
-	local sec = elapsedTimeVal and elapsedTimeVal.Value or 0
-	local threat = threatTextVal and threatTextVal.Value or "EASY"
-	local gold = (player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Gold")) and player.leaderstats.Gold.Value or 0
-	timerLabel.Text = "TIME: " .. formatTime(sec) .. " | THREAT: " .. threat .. " | GOLD: $" .. gold
+	local sec=elapsedTimeVal and elapsedTimeVal.Value or 0
+	local threat=threatTextVal and threatTextVal.Value or "EASY"
+	local statsFolder=player:FindFirstChild("leaderstats")
+	local gold=(statsFolder and statsFolder:FindFirstChild("Gold")) and statsFolder.Gold.Value or 0
+	timerLabel.Text=formatTime(sec); threatLabel.Text=string.upper(tostring(threat)); goldLabel.Text="$"..tostring(gold)
 	updateAbilityBarNames()
 end
 
 local function updateTeleporterDisplay()
 	if activeVal and activeVal.Value then
-		teleporterPanel.Visible = true
-		local pct = chargeVal and chargeVal.Value or 0
-		if pct >= 100 then
-			teleporterLabel.Text = "✅ TELEPORTER CHARGED! (CLEAR ENEMIES)"
-			teleporterLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+		teleporterPanel.Visible=true
+		local pct=chargeVal and chargeVal.Value or 0
+		if pct>=100 then
+			teleporterLabel.Text="TELEPORTER CHARGED // CLEAR REMAINING HOSTILES"
+			teleporterLabel.TextColor3=C.Health; objectiveLabel.Text="CLEAR REMAINING HOSTILES"
 		else
-			local inRange = false
-			local activeTeleporter = workspace:FindFirstChild("ActiveTeleporter")
-			if activeTeleporter and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-				if (player.Character.HumanoidRootPart.Position - activeTeleporter.Position).Magnitude <= 35 then inRange = true end
-			end
-			if inRange then
-				teleporterLabel.Text = "⚡ IN ZONE - CHARGING: " .. pct .. "%"
-				teleporterLabel.TextColor3 = Color3.fromRGB(255, 230, 80)
-			else
-				teleporterLabel.Text = "⚠️ OUTSIDE ZONE - PAUSED (" .. pct .. "%)"
-				teleporterLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-			end
+			local inRange=false
+			local tp=workspace:FindFirstChild("ActiveTeleporter")
+			local char=player.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart")
+			if tp and hrp then inRange=(hrp.Position-tp.Position).Magnitude<=35 end
+			teleporterLabel.Text=(inRange and "CHARGING TELEPORTER // " or "TELEPORTER PAUSED // ")..pct.."%"
+			teleporterLabel.TextColor3=inRange and C.Warning or C.Danger
+			objectiveLabel.Text=inRange and "REMAIN INSIDE THE TELEPORTER ZONE" or "RETURN TO THE TELEPORTER ZONE"
 		end
 	else
-		teleporterPanel.Visible = false
+		teleporterPanel.Visible=false; objectiveLabel.Text="FIND AND ACTIVATE THE TELEPORTER"
 	end
 end
+
+local ITEM_NAMES = {
+	{Val="FirstStompens",Title="FIRST STOMPENS",Short="SPD"},{Val="Dagger",Title="DAGGER",Short="ATK"},
+	{Val="BunnyHoppers",Title="BUNNY HOPPERS",Short="JMP"},{Val="PaulsJumpBoots",Title="PAUL'S JUMP BOOTS",Short="JMP+"},
+	{Val="CharliesFarsight",Title="CHARLIE'S FARSIGHT",Short="RNG"},{Val="Goblin",Title="GOBLIN",Short="GLD"},
+	{Val="Splitshot",Title="SPLITSHOT",Short="RICO"},
+}
 
 local function updateBuffsDisplay()
-	local buffsFolder = player:FindFirstChild("Buffs")
-	if buffsFolder then
-		local text = ""
-		local itemNames = {
-			{Val="FirstStompens", Title="First Stompens (+10% Speed)"},
-			{Val="Dagger", Title="Dagger (+12% Atk Speed)"},
-			{Val="BunnyHoppers", Title="Bunny Hoppers (+12% Jump)"},
-			{Val="PaulsJumpBoots", Title="Paul's Jump Boots (+30% Jump)"},
-			{Val="CharliesFarsight", Title="Charlie's Farsight (+25% Range)"},
-			{Val="Goblin", Title="Goblin (+$4 Bonus Gold)"},
-			{Val="Splitshot", Title="Splitshot (+12% Ricochet)"}
-		}
-		for _, item in ipairs(itemNames) do
-			local val = buffsFolder:FindFirstChild(item.Val)
-			if val and val.Value > 0 then text = text .. "• " .. item.Title .. " x" .. val.Value .. "\n" end
+	local folder=player:FindFirstChild("Buffs")
+	local parts={}
+	if folder then
+		for _, item in ipairs(ITEM_NAMES) do
+			local val=folder:FindFirstChild(item.Val)
+			if val and val.Value>0 then table.insert(parts,item.Short.." x"..val.Value.."  //  "..item.Title) end
 		end
-		if text == "" then text = "No items collected." end
-		buffsListLabel.Text = text
-	else
-		buffsListLabel.Text = "No items collected."
+	end
+	buffsListLabel.Text=#parts>0 and table.concat(parts,"\n") or "NO ITEMS ACQUIRED"
+end
+
+local function renderEndStats()
+	for _, child in ipairs(statsContainer:GetChildren()) do child:Destroy() end
+	local sec=elapsedTimeVal and elapsedTimeVal.Value or 0
+	for i, p in ipairs(Players:GetPlayers()) do
+		local cls=p:GetAttribute("SelectedClass") or "Gunner"; local kills=p:GetAttribute("Kills") or 0; local totalGold=p:GetAttribute("TotalGoldEarned") or 0
+		local itemTotal=0; local folder=p:FindFirstChild("Buffs"); if folder then for _,v in ipairs(folder:GetChildren()) do itemTotal+=v.Value end end
+		local card=Instance.new("Frame"); card.Name="PlayerCard"; card.Size=UDim2.new(1,0,0,54); card.Position=UDim2.new(0,0,0,(i-1)*60); card.BackgroundColor3=C.Panel; card.BackgroundTransparency=.08; card.BorderSizePixel=0; card.ZIndex=31; card.Parent=statsContainer
+		local avatar=Instance.new("ImageLabel"); avatar.Size=UDim2.new(0,40,0,40); avatar.Position=UDim2.new(0,7,.5,-20); avatar.Image="rbxthumb://type=AvatarHeadShot&id="..p.UserId.."&w=150&h=150"; avatar.BackgroundTransparency=1; avatar.ZIndex=32; avatar.Parent=card
+		local info=Instance.new("TextLabel"); info.Size=UDim2.new(1,-60,1,0); info.Position=UDim2.new(0,56,0,0); info.BackgroundTransparency=1; info.TextColor3=C.Text; info.TextSize=11; info.Font=Enum.Font.GothamBold; info.TextXAlignment=Enum.TextXAlignment.Left; info.ZIndex=32; info.Text=string.upper(p.Name).."  //  "..string.upper(cls).."\nTIME "..formatTime(sec).."     KILLS "..kills.."     GOLD $"..totalGold.."     ITEMS "..itemTotal; info.Parent=card
 	end
 end
 
-task.spawn(function()
-	while task.wait(0.5) do
-		updateTeleporterDisplay()
-		updateBuffsDisplay()
-	end
-end)
+local function updateHealth(humanoid)
+	local hp=math.max(0,humanoid.Health); local max=math.max(1,humanoid.MaxHealth)
+	healthFill.Size=UDim2.new(math.clamp(hp/max,0,1),0,1,0); hpLabel.Text=math.floor(hp).." / "..math.floor(max)
+end
 
-local function bindHealthAndBuffs(character)
-	if not character then return end
-	local humanoid = character:WaitForChild("Humanoid", 10)
-	if humanoid then
-		humanoid.HealthChanged:Connect(function()
-			local hp = math.max(0, humanoid.Health)
-			healthFill.Size = UDim2.new(hp / humanoid.MaxHealth, 0, 1, 0)
-			hpLabel.Text = math.floor(hp) .. " / " .. math.floor(humanoid.MaxHealth) .. " HP"
-		end)
-		humanoid.Died:Connect(function()
-			if gameStartedVal and gameStartedVal.Value then
-				renderEndStats()
-				statsFrame.Visible = true
-			end
-		end)
-	end
-
-	task.delay(0.5, function()
-		local gun = player.Backpack:FindFirstChildOfClass("Tool") or player.Character:FindFirstChildOfClass("Tool")
-		if gun and humanoid then humanoid:EquipTool(gun) end
+local boundHumanoid
+local function bindCharacter(character)
+	local humanoid=character and character:WaitForChild("Humanoid",10)
+	if not humanoid then return end
+	boundHumanoid=humanoid; updateHealth(humanoid)
+	humanoid.HealthChanged:Connect(function() if boundHumanoid==humanoid then updateHealth(humanoid) end end)
+	humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function() if boundHumanoid==humanoid then updateHealth(humanoid) end end)
+	humanoid.Died:Connect(function()
+		if gameStartedVal and gameStartedVal.Value then renderEndStats(); statsFrame.Visible=true end
+	end)
+	task.delay(.5,function()
+		if not humanoid.Parent then return end
+		local gun=player.Backpack:FindFirstChildOfClass("Tool") or character:FindFirstChildOfClass("Tool")
+		if gun then humanoid:EquipTool(gun) end
 	end)
 end
 
+if itemRemote then
+	itemRemote.OnClientEvent:Connect(function(titleText,desc,rarity)
+		local colors={Common=C.Text,Uncommon=C.Health,Rare=C.Danger}; local color=colors[rarity] or C.Text
+		local line=pickupBanner:FindFirstChild("Stroke"); if line then line.Color=color end
+		bannerHeader.TextColor3=color; bannerHeader.Text=string.upper(titleText); bannerDesc.Text=desc
+		pickupBanner.Visible=true
+		TweenService:Create(pickupBanner,TweenInfo.new(.24,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Position=UDim2.new(0,22,.32,0)}):Play()
+		task.delay(3.2,function()
+			local out=TweenService:Create(pickupBanner,TweenInfo.new(.24,Enum.EasingStyle.Quad,Enum.EasingDirection.In),{Position=UDim2.new(0,-350,.32,0)})
+			out:Play(); out.Completed:Once(function() pickupBanner.Visible=false end)
+		end)
+	end)
+end
+
+returnBtn.MouseButton1Click:Connect(function() statsFrame.Visible=false; if returnLobbyRemote then returnLobbyRemote:FireServer() end end)
+player:GetAttributeChangedSignal("SelectedClass"):Connect(updateAbilityBarNames)
 if elapsedTimeVal then elapsedTimeVal.Changed:Connect(updateHUDDisplay) end
+if threatTextVal then threatTextVal.Changed:Connect(updateHUDDisplay) end
+if player.Character then bindCharacter(player.Character) end
+player.CharacterAdded:Connect(bindCharacter)
 
 task.spawn(function()
-	local leaderstats = player:WaitForChild("leaderstats", 10)
-	if leaderstats then
-		local goldVal = leaderstats:WaitForChild("Gold", 10)
-		if goldVal then goldVal.Changed:Connect(updateHUDDisplay) end
-	end
+	local leaderstats=player:WaitForChild("leaderstats",10)
+	local gold=leaderstats and leaderstats:WaitForChild("Gold",10)
+	if gold then gold.Changed:Connect(updateHUDDisplay) end
 	updateHUDDisplay()
 end)
 
-if player.Character then bindHealthAndBuffs(player.Character) end
-player.CharacterAdded:Connect(bindHealthAndBuffs)
+task.spawn(function()
+	while task.wait(.35) do updateTeleporterDisplay(); updateBuffsDisplay() end
+end)
 
 if gameStartedVal then
 	gameStartedVal.Changed:Connect(function(started)
-		screenGui.Enabled = started == true
-		if not started then statsFrame.Visible = false end
+		screenGui.Enabled=started==true
+		if not started then statsFrame.Visible=false; teleporterPanel.Visible=false end
+		if started and boundHumanoid then updateHealth(boundHumanoid) end
 	end)
 end
 
-screenGui.Enabled = gameStartedVal and gameStartedVal.Value == true or false
-updateHUDDisplay(); updateBuffsDisplay()
-print("SUCCESS: Clean HUD System Active!")
+screenGui.Enabled=gameStartedVal and gameStartedVal.Value==true or false
+updateHUDDisplay(); updateBuffsDisplay(); updateTeleporterDisplay()

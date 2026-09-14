@@ -5,12 +5,14 @@ local TweenService = game:GetService("TweenService")
 local ContextActionService = game:GetService("ContextActionService")
 local GuiService = game:GetService("GuiService")
 local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 local showcaseRemote = ReplicatedStorage:WaitForChild("PlayShowcaseRemote", 10)
 local confirmDeployRemote = ReplicatedStorage:WaitForChild("ConfirmDeployRemote", 10)
 local selectClassRemote = ReplicatedStorage:WaitForChild("SelectClassRemote", 10)
+local deploymentRemote = ReplicatedStorage:WaitForChild("DeploymentRemote", 10)
 local gameStartedVal = ReplicatedStorage:WaitForChild("GameStarted", 10)
 local lobbyPhaseVal = ReplicatedStorage:WaitForChild("LobbyPhase", 10)
 local screenGui = player:WaitForChild("PlayerGui"):WaitForChild("LobbyUI")
@@ -26,29 +28,29 @@ local C = {
 }
 
 local CLASSES = {
-	Gunner = {role="RANGED PRESSURE // MOBILE ASSAULT", summary="Reliable sustained fire, a heavy piercing secondary, and simple repositioning tools.", stats={"100 HP","STANDARD MOBILITY","LOW COMPLEXITY"}, skills={
-		{"M1","PRIMARY","AUTO LASER CANNON","Rapid energy fire for consistent single-target pressure."},
-		{"M2","SECONDARY","HEAVY PIERCING SHOT","High-damage blast built to punch through priority targets."},
-		{"SHIFT","UTILITY","TACTICAL DASH","Burst forward to disengage, dodge, or close distance."},
-		{"R","SPECIAL","ORBITAL STRIKE","Call a high-yield blast onto the aimed position."},
+	Gunner = {role="RANGED PRESSURE // MOBILE ASSAULT", summary="Sustained ranged pressure with a heavy secondary and straightforward repositioning.", stats={"100 HP","STANDARD MOBILITY","LOW COMPLEXITY"}, skills={
+		{"M1","PRIMARY","AUTO LASER CANNON","Rapid sustained energy fire."},
+		{"M2","SECONDARY","HEAVY PIERCING SHOT","Heavy shot that punches through targets."},
+		{"SHIFT","UTILITY","TACTICAL DASH","Quick burst of forward movement."},
+		{"R","SPECIAL","ORBITAL STRIKE","Targeted high-yield area burst."},
 	}},
-	Ranger = {role="PRECISION // HIGH MOBILITY", summary="Fast ranged pressure with an instant blink and strong area denial.", stats={"90 HP","HIGH MOBILITY","MEDIUM COMPLEXITY"}, skills={
-		{"M1","PRIMARY","SEEKING ENERGY ARROWS","Rapid arrows for long-range pressure."},
-		{"M2","SECONDARY","PIERCING ARROW","Focused heavy arrow that hits hard at range."},
-		{"SHIFT","UTILITY","BLINK STEP","Instantly displace forward and break away from danger."},
-		{"R","SPECIAL","ARROW RAIN","Saturate an area with a high-damage energy barrage."},
+	Ranger = {role="PRECISION // HIGH MOBILITY", summary="Fast precision pressure built around instant repositioning and area denial.", stats={"90 HP","HIGH MOBILITY","MEDIUM COMPLEXITY"}, skills={
+		{"M1","PRIMARY","SEEKING ENERGY ARROWS","Rapid long-range seeking arrows."},
+		{"M2","SECONDARY","PIERCING ARROW","Focused heavy precision shot."},
+		{"SHIFT","UTILITY","BLINK STEP","Instant forward displacement."},
+		{"R","SPECIAL","ARROW RAIN","High-damage barrage over an area."},
 	}},
-	Brawler = {role="MELEE BURST // DURABLE", summary="A close-range bruiser that converts momentum into explosive strikes and shockwaves.", stats={"150 HP","HIGH MOBILITY","MEDIUM COMPLEXITY"}, skills={
-		{"M1","PRIMARY","IRON FIST COMBO","Fast close-range strikes with forward momentum."},
-		{"M2","SECONDARY","MOUNTAIN SPLITTER","Charge through enemies with an explosive palm shockwave."},
-		{"SHIFT","UTILITY","GALE FLASH STEP","High-speed martial dash for aggressive repositioning."},
-		{"R","SPECIAL","EIGHT-POLE SPIRIT SLAM","Leap and crash down in a devastating area shockwave."},
+	Brawler = {role="MELEE BURST // DURABLE", summary="Durable close-range pressure that turns movement into explosive melee bursts.", stats={"150 HP","HIGH MOBILITY","MEDIUM COMPLEXITY"}, skills={
+		{"M1","PRIMARY","IRON FIST COMBO","Fast strikes with forward momentum."},
+		{"M2","SECONDARY","MOUNTAIN SPLITTER","Charging palm shockwave."},
+		{"SHIFT","UTILITY","GALE FLASH STEP","High-speed aggressive dash."},
+		{"R","SPECIAL","EIGHT-POLE SPIRIT SLAM","Leap into a devastating shockwave."},
 	}},
-	Weaver = {role="CONTROL // GRAPPLE MOBILITY", summary="Control targets with web pressure, then use grapple movement to dictate the engagement.", stats={"100 HP","VERY HIGH MOBILITY","HIGH COMPLEXITY"}, skills={
-		{"M1","PRIMARY","WEB SHOOTERS","Rapid web projectiles for dependable ranged damage."},
-		{"M2","SECONDARY","WEB SNARE","Pin a target briefly while dealing a heavy burst of damage."},
-		{"SHIFT","UTILITY","GRAPPLE ZIP","Latch onto terrain and rapidly pull yourself toward it."},
-		{"R","SPECIAL","WEB SLAM","Pull nearby enemies inward and detonate a powerful web burst."},
+	Weaver = {role="CONTROL // GRAPPLE MOBILITY", summary="Control targets with web pressure, then dictate distance with grapple movement.", stats={"100 HP","VERY HIGH MOBILITY","HIGH COMPLEXITY"}, skills={
+		{"M1","PRIMARY","WEB SHOOTERS","Rapid web projectiles."},
+		{"M2","SECONDARY","WEB SNARE","Briefly pin and burst a target."},
+		{"SHIFT","UTILITY","GRAPPLE ZIP","Grapple terrain and pull forward."},
+		{"R","SPECIAL","WEB SLAM","Pull enemies inward and detonate."},
 	}},
 }
 local CLASS_ORDER = {"Gunner", "Ranger", "Brawler", "Weaver"}
@@ -81,61 +83,199 @@ end
 local oldCard = screenGui:FindFirstChild("ShowcaseCard")
 if oldCard then oldCard:Destroy() end
 
+-- Survivor select uses a darker grade than the title / squad staging screens.
+-- This keeps the industrial bay low-key and lets the local character lights do
+-- the visual work instead of globally lifting the entire scene.
+local oldSelectGrade = Lighting:FindFirstChild("SurvivorSelectGrade")
+if oldSelectGrade then oldSelectGrade:Destroy() end
+local selectGrade = Instance.new("ColorCorrectionEffect")
+selectGrade.Name = "SurvivorSelectGrade"
+selectGrade.Brightness = -0.08
+selectGrade.Contrast = 0.16
+selectGrade.Saturation = -0.16
+selectGrade.TintColor = Color3.fromRGB(198, 217, 224)
+selectGrade.Enabled = false
+selectGrade.Parent = Lighting
+
 local flow = getOrCreate("Frame", "FlowTransition", screenGui, {
 	Size=UDim2.fromScale(1,1), Position=UDim2.fromScale(0,0), BackgroundColor3=Color3.new(0,0,0),
 	BackgroundTransparency=1, BorderSizePixel=0, ZIndex=100, Visible=true,
 })
 
 local rootGui = make("Frame", "ShowcaseRoot", screenGui, {Size=UDim2.fromScale(1,1), BackgroundTransparency=1, Visible=false, ZIndex=20})
-local shade = make("Frame", "LeftShade", rootGui, {Size=UDim2.fromScale(.61,1), BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=.2, BorderSizePixel=0, ZIndex=20})
-make("UIGradient", "Gradient", shade, {Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,.06),NumberSequenceKeypoint.new(.72,.48),NumberSequenceKeypoint.new(1,1)})})
-local bottomShade = make("Frame", "BottomShade", rootGui, {Size=UDim2.fromScale(1,.25), Position=UDim2.fromScale(0,.75), BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=.34, BorderSizePixel=0, ZIndex=20})
-make("UIGradient", "Gradient", bottomShade, {Rotation=90, Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,.08)})})
 
-local phase = make("TextLabel", "Phase", rootGui, {Size=UDim2.new(.45,0,0,20), Position=UDim2.fromScale(.045,.055), BackgroundTransparency=1, Text="SURVIVOR LOADOUT // DEPLOYMENT", TextColor3=C.Accent, TextSize=12, Font=Enum.Font.GothamMedium, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23})
-local title = make("TextLabel", "ClassTitle", rootGui, {Size=UDim2.new(.45,0,0,50), Position=UDim2.fromScale(.045,.078), BackgroundTransparency=1, Text="GUNNER", TextColor3=C.Text, TextSize=38, Font=Enum.Font.GothamBlack, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23})
-local role = make("TextLabel", "Role", rootGui, {Size=UDim2.new(.45,0,0,22), Position=UDim2.fromScale(.045,.137), BackgroundTransparency=1, Text="", TextColor3=C.Muted, TextSize=13, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23})
+-- RoR2-style composition: the UI owns the left side while the 3D survivor gets
+-- clean negative space on the right.  The gradient is intentionally much darker
+-- at the far-left edge and fades before reaching the presentation character.
+local shade = make("Frame", "LeftShade", rootGui, {Size=UDim2.fromScale(.60,1), BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=.08, BorderSizePixel=0, ZIndex=20})
+make("UIGradient", "Gradient", shade, {Transparency=NumberSequence.new({
+	NumberSequenceKeypoint.new(0,.02),
+	NumberSequenceKeypoint.new(.58,.23),
+	NumberSequenceKeypoint.new(.84,.64),
+	NumberSequenceKeypoint.new(1,1),
+})})
+local bottomShade = make("Frame", "BottomShade", rootGui, {Size=UDim2.fromScale(1,.22), Position=UDim2.fromScale(0,.78), BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=.46, BorderSizePixel=0, ZIndex=20})
+make("UIGradient", "Gradient", bottomShade, {Rotation=90, Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,.18)})})
 
-local classRail = make("Frame", "ClassRail", rootGui, {Size=UDim2.new(0,472,0,38), Position=UDim2.fromScale(.045,.17), BackgroundTransparency=1, ZIndex=24})
+local phase = make("TextLabel", "Phase", rootGui, {
+		Size=UDim2.new(.44,0,0,24), Position=UDim2.fromScale(.045,.085), BackgroundTransparency=1,
+		Text="CHARACTER SELECT", TextColor3=C.Text, TextSize=18, Font=Enum.Font.GothamBold,
+		TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23,
+})
+local phaseRule = make("Frame", "PhaseRule", rootGui, {
+		Size=UDim2.new(0,360,0,2), Position=UDim2.fromScale(.045,.123), BackgroundColor3=C.AccentSoft,
+		BackgroundTransparency=.35, BorderSizePixel=0, ZIndex=23,
+})
+
+local classRail = make("Frame", "ClassRail", rootGui, {Size=UDim2.new(0,300,0,64), Position=UDim2.fromScale(.045,.145), BackgroundTransparency=1, ZIndex=24})
 local classButtons = {}
+local classGlyphs = {}
 for i, className in ipairs(CLASS_ORDER) do
 	local button = make("TextButton", className.."Button", classRail, {
-		Size=UDim2.new(0,112,0,34), Position=UDim2.new(0,(i-1)*120,0,0),
-		BackgroundColor3=C.Panel, BorderSizePixel=0, AutoButtonColor=false,
-		Text=string.upper(className), TextColor3=C.Muted, TextSize=10,
-		Font=Enum.Font.GothamBold, Selectable=true, ZIndex=25,
+		Size=UDim2.fromOffset(62,62), Position=UDim2.new(0,(i-1)*70,0,0),
+		BackgroundColor3=C.Panel, BackgroundTransparency=.08, BorderSizePixel=0,
+		AutoButtonColor=false, Text="", Selectable=true, ZIndex=25,
 	})
 	stroke(button,C.AccentSoft,.7)
+	local glyph = make("TextLabel", "Glyph", button, {
+		Size=UDim2.new(1,0,1,-17), BackgroundTransparency=1,
+		Text=string.sub(string.upper(className),1,1), TextColor3=C.Text,
+		TextSize=26, Font=Enum.Font.GothamBlack, ZIndex=26,
+	})
+	make("TextLabel", "Name", button, {
+		Size=UDim2.new(1,-4,0,15), Position=UDim2.new(0,2,1,-16), BackgroundTransparency=1,
+		Text=string.upper(className), TextColor3=C.Muted, TextSize=7,
+		Font=Enum.Font.GothamBold, TextTruncate=Enum.TextTruncate.AtEnd, ZIndex=26,
+	})
 	classButtons[className]=button
+	classGlyphs[className]=glyph
 end
 
-local panel = make("Frame", "LoadoutPanel", rootGui, {Size=UDim2.new(.42,0,0,410), Position=UDim2.fromScale(.045,.225), BackgroundColor3=C.Ink, BackgroundTransparency=.14, BorderSizePixel=0, ZIndex=22})
-make("UISizeConstraint", "Size", panel, {MinSize=Vector2.new(440,410), MaxSize=Vector2.new(610,465)}); stroke(panel,C.AccentSoft,.46)
-local summary = make("TextLabel", "Summary", panel, {Size=UDim2.new(1,-28,0,52), Position=UDim2.new(0,14,0,12), BackgroundTransparency=1, Text="", TextColor3=C.Muted, TextSize=13, Font=Enum.Font.GothamMedium, TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, ZIndex=23})
-local stats = make("TextLabel", "Stats", panel, {Size=UDim2.new(1,-28,0,32), Position=UDim2.new(0,14,0,67), BackgroundColor3=C.Panel, BackgroundTransparency=.12, BorderSizePixel=0, Text="", TextColor3=C.Text, TextSize=10, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23})
+local title = make("TextLabel", "ClassTitle", rootGui, {
+		Size=UDim2.new(.44,0,0,42), Position=UDim2.fromScale(.045,.245), BackgroundTransparency=1,
+		Text="GUNNER", TextColor3=C.Text, TextSize=32, Font=Enum.Font.GothamBlack,
+		TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23,
+})
+local role = make("TextLabel", "Role", rootGui, {
+		Size=UDim2.new(.44,0,0,20), Position=UDim2.fromScale(.045,.298), BackgroundTransparency=1,
+		Text="", TextColor3=C.Accent, TextSize=10, Font=Enum.Font.GothamBold,
+		TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23,
+})
 
-local list = make("Frame", "Skills", panel, {Size=UDim2.new(1,-28,1,-112), Position=UDim2.new(0,14,0,106), BackgroundTransparency=1, ZIndex=23})
-make("UIListLayout", "Layout", list, {FillDirection=Enum.FillDirection.Vertical, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
+local panel = make("Frame", "LoadoutPanel", rootGui, {
+		Size=UDim2.new(.36,0,0,348), Position=UDim2.fromScale(.045,.342),
+		BackgroundColor3=C.Ink, BackgroundTransparency=.18, BorderSizePixel=0, ZIndex=22,
+})
+make("UISizeConstraint", "Size", panel, {MinSize=Vector2.new(390,330), MaxSize=Vector2.new(520,370)}); stroke(panel,C.AccentSoft,.5)
+
+local overviewTab = make("TextLabel", "OverviewTab", panel, {
+	Size=UDim2.new(.5,-1,0,28), BackgroundColor3=C.Panel, BackgroundTransparency=.3,
+	BorderSizePixel=0, Text="OVERVIEW", TextColor3=C.Muted, TextSize=9,
+	Font=Enum.Font.GothamBold, ZIndex=23,
+})
+local skillsTab = make("TextLabel", "SkillsTab", panel, {
+	Size=UDim2.new(.5,-1,0,28), Position=UDim2.new(.5,1,0,0), BackgroundColor3=C.Selected,
+	BorderSizePixel=0, Text="SKILLS", TextColor3=C.Dark, TextSize=9,
+	Font=Enum.Font.GothamBold, ZIndex=23,
+})
+local stats = make("TextLabel", "Stats", panel, {
+	Size=UDim2.new(1,-24,0,26), Position=UDim2.new(0,12,0,37), BackgroundTransparency=1,
+	Text="", TextColor3=C.Text, TextSize=9, Font=Enum.Font.GothamBold,
+	TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23,
+})
+local summary = make("TextLabel", "Summary", panel, {
+	Size=UDim2.new(1,-24,0,39), Position=UDim2.new(0,12,0,62), BackgroundTransparency=1,
+	Text="", TextColor3=C.Muted, TextSize=10, Font=Enum.Font.GothamMedium, TextWrapped=true,
+	TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, ZIndex=23,
+})
+
+local list = make("Frame", "Skills", panel, {Size=UDim2.new(1,-24,1,-108), Position=UDim2.new(0,12,0,104), BackgroundTransparency=1, ZIndex=23})
+make("UIListLayout", "Layout", list, {FillDirection=Enum.FillDirection.Vertical, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,5)})
 local rows = {}
 for i=1,4 do
-	local row = make("Frame", "Skill"..i, list, {Size=UDim2.new(1,0,0,70), LayoutOrder=i, BackgroundColor3=C.Panel, BackgroundTransparency=.1, BorderSizePixel=0, ZIndex=24}); stroke(row,C.AccentSoft,.72)
-	local key = make("TextLabel", "Key", row, {Size=UDim2.new(0,58,1,0), BackgroundColor3=C.Selected, BorderSizePixel=0, Text="", TextColor3=C.Dark, TextSize=11, Font=Enum.Font.GothamBold, ZIndex=25})
-	local slot = make("TextLabel", "Slot", row, {Size=UDim2.new(1,-76,0,15), Position=UDim2.new(0,70,0,6), BackgroundTransparency=1, Text="", TextColor3=C.Accent, TextSize=9, Font=Enum.Font.GothamMedium, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=25})
-	local name = make("TextLabel", "Name", row, {Size=UDim2.new(1,-76,0,20), Position=UDim2.new(0,70,0,21), BackgroundTransparency=1, Text="", TextColor3=C.Text, TextSize=13, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=25})
-	local desc = make("TextLabel", "Description", row, {Size=UDim2.new(1,-76,0,24), Position=UDim2.new(0,70,0,42), BackgroundTransparency=1, Text="", TextColor3=C.Muted, TextSize=10, Font=Enum.Font.Gotham, TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, ZIndex=25})
+	local row = make("Frame", "Skill"..i, list, {Size=UDim2.new(1,0,0,54), LayoutOrder=i, BackgroundColor3=C.Panel, BackgroundTransparency=.16, BorderSizePixel=0, ZIndex=24}); stroke(row,C.AccentSoft,.76)
+	local key = make("TextLabel", "Key", row, {Size=UDim2.new(0,50,1,0), BackgroundColor3=C.Selected, BackgroundTransparency=.03, BorderSizePixel=0, Text="", TextColor3=C.Dark, TextSize=10, Font=Enum.Font.GothamBold, ZIndex=25})
+	local slot = make("TextLabel", "Slot", row, {Size=UDim2.new(1,-64,0,12), Position=UDim2.new(0,61,0,4), BackgroundTransparency=1, Text="", TextColor3=C.Accent, TextSize=7, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=25})
+	local name = make("TextLabel", "Name", row, {Size=UDim2.new(1,-64,0,17), Position=UDim2.new(0,61,0,15), BackgroundTransparency=1, Text="", TextColor3=C.Text, TextSize=11, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=25})
+	local desc = make("TextLabel", "Description", row, {Size=UDim2.new(1,-64,0,18), Position=UDim2.new(0,61,0,32), BackgroundTransparency=1, Text="", TextColor3=C.Muted, TextSize=8, Font=Enum.Font.Gotham, TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, ZIndex=25})
 	rows[i]={key,slot,name,desc}
 end
 
-local squad = make("TextLabel", "Squad", rootGui, {Size=UDim2.new(0,360,0,42), Position=UDim2.new(1,-390,0,26), BackgroundColor3=C.Ink, BackgroundTransparency=.38, BorderSizePixel=0, Text="", TextColor3=C.Muted, TextSize=11, Font=Enum.Font.GothamMedium, TextXAlignment=Enum.TextXAlignment.Right, ZIndex=23}); stroke(squad,C.AccentSoft,.68)
-local deploy = make("TextButton", "DeployBtn", rootGui, {Size=UDim2.new(0,330,0,58), Position=UDim2.new(1,-370,1,-92), BackgroundColor3=C.Selected, BorderSizePixel=0, AutoButtonColor=false, Text="READY TO DEPLOY", TextColor3=C.Dark, TextSize=17, Font=Enum.Font.GothamBold, Selectable=true, ZIndex=24}); stroke(deploy,C.Accent,.18)
-local hint = make("TextLabel", "DeployHint", rootGui, {Size=UDim2.new(0,330,0,20), Position=UDim2.new(1,-370,1,-30), BackgroundTransparency=1, Text="ENTER / A  CONFIRM DEPLOYMENT", TextColor3=C.Muted, TextSize=9, Font=Enum.Font.GothamMedium, TextXAlignment=Enum.TextXAlignment.Right, ZIndex=24})
+local navHint = make("TextLabel", "NavigationHint", rootGui, {
+		Size=UDim2.new(.40,0,0,18), Position=UDim2.fromScale(.045,.875), BackgroundTransparency=1,
+		Text="A / D   OR   ← / →   CHANGE SURVIVOR", TextColor3=C.Muted, TextSize=8,
+		Font=Enum.Font.GothamMedium, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=23,
+})
+
+local squad = make("TextLabel", "Squad", rootGui, {
+	Size=UDim2.new(0,300,0,20), Position=UDim2.new(1,-328,1,-126), BackgroundTransparency=1,
+	Text="", TextColor3=C.Muted, TextSize=9, Font=Enum.Font.GothamMedium,
+	TextXAlignment=Enum.TextXAlignment.Right, ZIndex=23,
+})
+local deploy = make("TextButton", "DeployBtn", rootGui, {
+	Size=UDim2.new(0,300,0,52), Position=UDim2.new(1,-328,1,-98),
+	BackgroundColor3=C.Selected, BorderSizePixel=0, AutoButtonColor=false,
+	Text="CONFIRM SURVIVOR", TextColor3=C.Dark, TextSize=15, Font=Enum.Font.GothamBold,
+	Selectable=true, ZIndex=24,
+}); stroke(deploy,C.Accent,.18)
+local hint = make("TextLabel", "DeployHint", rootGui, {
+	Size=UDim2.new(0,300,0,18), Position=UDim2.new(1,-328,1,-38), BackgroundTransparency=1,
+	Text="ENTER / A   CONFIRM SURVIVOR", TextColor3=C.Muted, TextSize=8,
+	Font=Enum.Font.GothamMedium, TextXAlignment=Enum.TextXAlignment.Right, ZIndex=24,
+})
 
 local active = false
 local confirmed = false
 local generation = 0
 local cameraBind = "ByteforceShowcaseCamera"
 local movementLockBind = "ByteforceShowcaseMovementLock"
+local deploymentCameraBind = "ByteforceDeploymentCamera"
 local controls
+local presentationFillAttachment
+local deploymentActive = false
+local deploymentPrimed = false
+local deploymentPod = nil
+local deploymentGroundPosition = nil
+local deploymentGroundForward = nil
+local deploymentGroundRight = nil
+local deploymentLandingPosition = nil
+local deploymentGeneration = 0
+local deploymentStartTime = 0
+local deploymentDuration = 1
+local impactImpulse = 0
+local impactStarted = nil
+local hatchReframeStarted = nil
+
+local function destroyPresentationFill()
+	if presentationFillAttachment and presentationFillAttachment.Parent then
+		presentationFillAttachment:Destroy()
+	end
+	presentationFillAttachment=nil
+end
+
+local function createPresentationFill(rootPart)
+	destroyPresentationFill()
+	if not rootPart or not rootPart.Parent then return end
+
+	-- Keep the hero readable independently of Roblox's delayed world-light/shadow
+	-- refresh after the large teleport into the showcase bay. This attachment is
+	-- client-only, unshadowed, and exists only during survivor select.
+	local attachment=Instance.new("Attachment")
+	attachment.Name="SurvivorSelectFillAttachment"
+	attachment.CFrame=CFrame.new(-2.5,4.4,5)
+	attachment.Parent=rootPart
+
+	local fill=Instance.new("PointLight")
+	fill.Name="SurvivorSelectFill"
+	fill.Color=Color3.fromRGB(181,210,219)
+	fill.Brightness=1.05
+	fill.Range=18
+	fill.Shadows=false
+	fill.Enabled=true
+	fill.Parent=attachment
+
+	presentationFillAttachment=attachment
+end
 
 local function tweenFlow(alpha, duration)
 	local t = TweenService:Create(flow, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {BackgroundTransparency=alpha})
@@ -172,25 +312,67 @@ local function refreshLoadout()
 	for name, button in pairs(classButtons) do
 		local selected = name == cls
 		button.BackgroundColor3 = selected and C.Selected or C.Panel
-		button.TextColor3 = selected and C.Dark or C.Muted
+		button.BackgroundTransparency = selected and 0 or .08
+		local glyph = classGlyphs[name]
+		if glyph then glyph.TextColor3 = selected and C.Dark or C.Text end
+		local nameLabel = button:FindFirstChild("Name")
+		if nameLabel then nameLabel.TextColor3 = selected and C.Dark or C.Muted end
+		local border = button:FindFirstChild("Stroke")
+		if border then
+			border.Color = selected and C.Accent or C.AccentSoft
+			border.Transparency = selected and .08 or .7
+		end
 		button.Active = active and not confirmed
+	end
+end
+
+local function setShowcaseGrade(enabled)
+	selectGrade.Enabled = enabled
+	local sharedBloom = Lighting:FindFirstChild("MainMenuBloom")
+	if sharedBloom and sharedBloom:IsA("BloomEffect") then
+		-- The title screen can afford a broad glow; survivor select should reserve
+		-- bloom for the small practical lights and podium edge.
+		sharedBloom.Intensity = enabled and 0.2 or 0.45
+		sharedBloom.Size = enabled and 24 or 34
+		sharedBloom.Threshold = enabled and 1.35 or 1.1
 	end
 end
 player:GetAttributeChangedSignal("SelectedClass"):Connect(refreshLoadout); refreshLoadout()
 
 local function stopCamera() RunService:UnbindFromRenderStep(cameraBind) end
+local function stopDeploymentCamera() RunService:UnbindFromRenderStep(deploymentCameraBind) end
 local function restoreCamera()
-	stopCamera(); camera.CameraType=Enum.CameraType.Custom; camera.FieldOfView=70
+	stopCamera(); stopDeploymentCamera(); camera.CameraType=Enum.CameraType.Custom; camera.FieldOfView=70
 	local char=player.Character; local hum=char and char:FindFirstChildOfClass("Humanoid"); if hum then camera.CameraSubject=hum end
 end
 
+local function showcaseCameraFrame(rootPart, t)
+	local right=rootPart.CFrame.RightVector
+	local forward=rootPart.CFrame.LookVector
+	-- Aim off the presentation character so the survivor reads on the right third
+	-- of the screen instead of sitting under the UI. The tiny time-based offsets are
+	-- ambient drift only; the transition into this framing is handled by the black
+	-- screen, so there should never be a visible camera travel into survivor select.
+	local focus=rootPart.Position+Vector3.new(0,1.45,0)+right*4.4
+	local pos=rootPart.Position
+		+forward*(14.8+math.sin(t*.16)*.12)
+		+right*(2.4+math.sin(t*.11)*.16)
+		+Vector3.new(0,3.05+math.sin(t*.14)*.05,0)
+	return CFrame.lookAt(pos,focus)
+end
+
 local function startCamera(rootPart)
-	stopCamera(); camera.CameraType=Enum.CameraType.Scriptable; camera.FieldOfView=52; local started=os.clock()
+	stopCamera()
+	camera.CameraType=Enum.CameraType.Scriptable
+	camera.CFrame=showcaseCameraFrame(rootPart,0)
+	camera.FieldOfView=48
+
+	local started=os.clock()
 	RunService:BindToRenderStep(cameraBind,Enum.RenderPriority.Camera.Value+1,function()
 		if not active or not rootPart.Parent then return end
-		local t=os.clock()-started; local focus=rootPart.Position+Vector3.new(0,1.6,0)
-		local pos=rootPart.Position+rootPart.CFrame.LookVector*(10.8+math.sin(t*.2)*.25)+rootPart.CFrame.RightVector*(4.8+math.sin(t*.13)*.4)+Vector3.new(0,2.7+math.sin(t*.17)*.1,0)
-		camera.CFrame=CFrame.lookAt(pos,focus)
+		local t=os.clock()-started
+		camera.CFrame=showcaseCameraFrame(rootPart,t)
+		camera.FieldOfView=48
 	end)
 end
 
@@ -263,15 +445,302 @@ local function showShowcase()
 	generation+=1; local mine=generation; deployVisual(false); refreshLoadout(); flow.BackgroundTransparency=1
 	local cover=tweenFlow(0,.18); cover.Completed:Wait(); if mine~=generation then return end
 	local char=player.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart"); if not hrp then flow.BackgroundTransparency=1; return end
-	hideLobby(); active=true; rootGui.Visible=true; refreshLoadout(); setControls(false); bindInput(); startCamera(hrp)
-	title.TextTransparency=1; role.TextTransparency=1; panel.Position=UDim2.fromScale(.025,.225); panel.BackgroundTransparency=1; deploy.Position=UDim2.new(1,-345,1,-92); deploy.BackgroundTransparency=1
-	RunService.RenderStepped:Wait(); tweenFlow(1,.34); tw(title,.25,{TextTransparency=0}); tw(role,.3,{TextTransparency=0}); tw(panel,.3,{Position=UDim2.fromScale(.045,.225),BackgroundTransparency=.14}); tw(deploy,.3,{Position=UDim2.new(1,-370,1,-92),BackgroundTransparency=0})
+
+	-- Everything below this point happens while the screen is fully black. Do not
+	-- reveal the overlay again until the showcase camera, local post effects and the
+	-- first few rendered lighting frames are already settled.
+	hideLobby()
+	active=true
+	setControls(false)
+	setShowcaseGrade(true)
+	createPresentationFill(hrp)
+	startCamera(hrp)
+	bindInput()
+	refreshLoadout()
+	phase.TextTransparency=1
+	phaseRule.BackgroundTransparency=1
+	title.TextTransparency=1
+	role.TextTransparency=1
+		classRail.Position=UDim2.fromScale(.025,.145)
+		panel.Position=UDim2.fromScale(.025,.342)
+	panel.BackgroundTransparency=1
+	navHint.TextTransparency=1
+	squad.TextTransparency=1
+	deploy.Position=UDim2.new(1,-304,1,-98)
+	deploy.BackgroundTransparency=1
+	hint.TextTransparency=1
+	rootGui.Visible=true
+
+	-- A large spatial camera jump can take Roblox several frames to rebuild the
+	-- nearby lighting/shadow state. In Studio this was visibly longer than a simple
+	-- 2-4 frame wait: the survivor first appeared as a black silhouette and only then
+	-- received the bay lighting. Keep the transition fully opaque for a short,
+	-- deterministic warm-up window so that renderer work happens off-screen.
+	local warmupStarted=os.clock()
+	repeat
+		RunService.RenderStepped:Wait()
+		if mine~=generation or not active then return end
+	until os.clock()-warmupStarted>=.5
+	tweenFlow(1,.30)
+	tw(phase,.22,{TextTransparency=0})
+	tw(phaseRule,.28,{BackgroundTransparency=.35})
+		tw(classRail,.28,{Position=UDim2.fromScale(.045,.145)})
+	tw(title,.25,{TextTransparency=0})
+	tw(role,.3,{TextTransparency=0})
+		tw(panel,.3,{Position=UDim2.fromScale(.045,.342),BackgroundTransparency=.18})
+	tw(navHint,.34,{TextTransparency=0})
+	tw(squad,.3,{TextTransparency=0})
+	tw(deploy,.3,{Position=UDim2.new(1,-328,1,-98),BackgroundTransparency=0})
+	tw(hint,.34,{TextTransparency=0})
+end
+
+local function findLocalDeploymentPod(timeout)
+	local deadline=os.clock()+(timeout or 3)
+	repeat
+		local folder=workspace:FindFirstChild("ByteforceDropPods")
+		if folder then
+			for _,candidate in ipairs(folder:GetChildren()) do
+				if candidate:IsA("Model") and candidate:GetAttribute("OwnerUserId")==player.UserId then
+					return candidate
+				end
+			end
+		end
+		RunService.Heartbeat:Wait()
+	until os.clock()>=deadline
+	return nil
+end
+
+local function deploymentFormationCenter(fallbackPod)
+	local folder=workspace:FindFirstChild("ByteforceDropPods")
+	if not folder then return fallbackPod:GetPivot().Position end
+	local total=Vector3.zero
+	local count=0
+	for _,candidate in ipairs(folder:GetChildren()) do
+		if candidate:IsA("Model") and candidate:GetAttribute("DeploymentPod") then
+			total+=candidate:GetPivot().Position
+			count+=1
+		end
+	end
+	return count>0 and total/count or fallbackPod:GetPivot().Position
+end
+
+local function cacheDeploymentGroundAnchor(pod)
+	local podCF=pod:GetPivot()
+	local landing=pod:GetAttribute("LandingPosition")
+	if typeof(landing)~="Vector3" then landing=podCF.Position-Vector3.new(0,420,0) end
+
+	local forward=pod:GetAttribute("LandingForward")
+	if typeof(forward)~="Vector3" then forward=Vector3.new(podCF.LookVector.X,0,podCF.LookVector.Z) end
+	forward=Vector3.new(forward.X,0,forward.Z)
+	forward=forward.Magnitude>.01 and forward.Unit or Vector3.new(0,0,-1)
+
+	local right=pod:GetAttribute("LandingRight")
+	if typeof(right)~="Vector3" then right=Vector3.new(podCF.RightVector.X,0,podCF.RightVector.Z) end
+	right=Vector3.new(right.X,0,right.Z)
+	right=right.Magnitude>.01 and right.Unit or Vector3.new(1,0,0)
+
+	deploymentLandingPosition=landing
+	deploymentGroundForward=forward
+	deploymentGroundRight=right
+	-- This world-space position is intentionally calculated exactly once. Nothing in
+	-- the descent is allowed to replace it with a pod-relative/chase camera position.
+	deploymentGroundPosition=landing+forward*20+right*7+Vector3.new(0,2.6,0)
+end
+
+local function deploymentCameraFrame(pod, serverNow)
+	local podCF=pod:GetPivot()
+	local raw=math.clamp((serverNow-deploymentStartTime)/math.max(deploymentDuration,.01),0,1)
+	local braking=math.clamp((raw-.68)/.32,0,1)
+	local hatchBlend=0
+	if hatchReframeStarted then
+		hatchBlend=TweenService:GetValue(math.clamp((os.clock()-hatchReframeStarted)/.55,0,1),Enum.EasingStyle.Quad,Enum.EasingDirection.Out)
+	end
+	local landing=deploymentLandingPosition or pod:GetAttribute("LandingPosition")
+	if typeof(landing)~="Vector3" then landing=podCF.Position-Vector3.new(0,420,0) end
+	local forward=deploymentGroundForward or Vector3.new(0,0,-1)
+	local right=deploymentGroundRight or Vector3.new(1,0,0)
+	local groundPosition=deploymentGroundPosition or (landing+forward*20+right*7+Vector3.new(0,2.6,0))
+
+	-- The camera is physically pinned to one terrain position for the entire cinematic.
+	-- Only its look target and FOV are allowed to change while the pod descends.
+	local formationCenter=deploymentFormationCenter(pod)
+	local formationTarget=formationCenter+Vector3.new(0,-3,0)
+	local podTarget=podCF.Position+Vector3.new(0,-.15,0)
+	local targetBlend=TweenService:GetValue(math.clamp((raw-.32)/.28,0,1),Enum.EasingStyle.Sine,Enum.EasingDirection.InOut)
+	local target=formationTarget:Lerp(podTarget,targetBlend)
+
+	-- Tighten the lens as the capsule grows instead of moving the camera toward it.
+	local fovBlend=TweenService:GetValue(math.clamp((raw-.20)/.62,0,1),Enum.EasingStyle.Sine,Enum.EasingDirection.InOut)
+	local fov=72+(53-72)*fovBlend-(braking*2)
+
+	-- Once the hatch fires, keep the exact same camera position and simply lower the
+	-- aim toward the landed pod/survivor. There is no post-impact hero-position slide.
+	if hatchBlend>0 then
+		local heroTarget=landing+Vector3.new(0,2.1,0)
+		target=target:Lerp(heroTarget,hatchBlend)
+		fov=fov+(50-fov)*hatchBlend
+	end
+
+	local frame=CFrame.lookAt(groundPosition,target)
+
+	if impactImpulse>0 then
+		local t=os.clock()*82
+		local amp=impactImpulse
+		-- Shake orientation/lens only. Translation would make the supposedly planted
+		-- terrain camera hover around at the moment of impact.
+		local pitch=math.rad(math.sin(t*1.27)*1.25*amp)
+		local yaw=math.rad(math.sin(t*.83)*1.05*amp)
+		local roll=math.rad(math.sin(t*1.61)*.7*amp)
+		frame=frame*CFrame.Angles(pitch,yaw,roll)
+		fov+=2.4*amp
+	end
+
+	return frame,fov
+end
+
+local function primeDeploymentTransition()
+	if deploymentPrimed or deploymentActive then return end
+	deploymentPrimed=true
+
+	-- This runs as soon as DEPLOYING begins (and is also triggered by PREPARE).
+	-- Stop the showcase camera before the server moves the character into the pod.
+	-- The screen can finish fading to black while the camera is frozen here; it must
+	-- never continue following the character hundreds of studs into the sky.
+	generation+=1
+	tweenFlow(0,.12)
+	active=false
+	rootGui.Visible=false
+	unbindInput()
+	stopCamera()
+	destroyPresentationFill()
+	setShowcaseGrade(false)
+	setControls(false)
+	camera.CameraType=Enum.CameraType.Scriptable
+end
+
+local function beginDeployment(startTime,duration)
+	deploymentGeneration+=1
+	local mine=deploymentGeneration
+	deploymentStartTime=startTime or workspace:GetServerTimeNow()
+	deploymentDuration=duration or 6.0
+	impactImpulse=0
+	impactStarted=nil
+	hatchReframeStarted=nil
+
+	-- Usually PREPARE / the DEPLOYING phase has already claimed the camera. Keep an
+	-- idempotent fallback here for late joins or unusual replication ordering, then
+	-- wait for full black before snapping to the ground shot.
+	primeDeploymentTransition()
+	local cover=tweenFlow(0,.08)
+	cover.Completed:Wait()
+	if mine~=deploymentGeneration then return end
+
+	local pod=findLocalDeploymentPod(3)
+	if mine~=deploymentGeneration then return end
+	if not pod then
+		warn("Deployment camera could not find the local drop pod.")
+		flow.BackgroundTransparency=0
+		return
+	end
+
+	deploymentPod=pod
+	deploymentActive=true
+	cacheDeploymentGroundAnchor(pod)
+	stopDeploymentCamera()
+	camera.CameraType=Enum.CameraType.Scriptable
+	-- At raw=0 deploymentCameraFrame is the fixed ground/sky shot. This assignment
+	-- happens while fully black, so there is no visible travel from the showcase or
+	-- from the falling pod down to the landing zone.
+	local initialCF,initialFov=deploymentCameraFrame(pod,workspace:GetServerTimeNow())
+	camera.CFrame=initialCF
+	camera.FieldOfView=initialFov
+
+	local lastFrame=os.clock()
+	RunService:BindToRenderStep(deploymentCameraBind,Enum.RenderPriority.Camera.Value+2,function()
+		if not deploymentActive or mine~=deploymentGeneration or not pod.Parent then return end
+		local nowClock=os.clock()
+		local dt=math.clamp(nowClock-lastFrame,0,0.05)
+		lastFrame=nowClock
+		impactImpulse=math.max(0,impactImpulse-dt*2.65)
+		local frame,fov=deploymentCameraFrame(pod,workspace:GetServerTimeNow())
+		camera.CFrame=frame
+		camera.FieldOfView=fov
+	end)
+
+	-- Hold black until the terrain/pod camera has rendered several frames and the
+	-- synchronized descent is just beginning. This avoids exposing the huge spatial
+	-- jump from the showcase bay to the live map.
+	while deploymentActive and mine==deploymentGeneration and workspace:GetServerTimeNow()<deploymentStartTime-.06 do
+		RunService.RenderStepped:Wait()
+	end
+	if not deploymentActive or mine~=deploymentGeneration then return end
+	tweenFlow(1,.32)
+end
+
+local function finishDeployment()
+	if not deploymentActive then return end
+	deploymentGeneration+=1
+	deploymentActive=false
+	deploymentPrimed=false
+	deploymentGroundPosition=nil
+	deploymentGroundForward=nil
+	deploymentGroundRight=nil
+	deploymentLandingPosition=nil
+	impactImpulse=0
+	impactStarted=nil
+	hatchReframeStarted=nil
+	stopDeploymentCamera()
+	flow.BackgroundTransparency=1
+
+	-- The deployment camera spends the hatch beat looking back toward the pod. If we
+	-- hand that exact view to Roblox's shoulder camera, the landed capsule sits
+	-- directly between the player and the camera. Recompose to a gameplay-ready
+	-- three-quarter shoulder view first, then release camera ownership.
+	local pod=deploymentPod
+	local char=player.Character
+	local root=char and char:FindFirstChild("HumanoidRootPart")
+	if pod and pod.Parent and root and root.Parent then
+		local podCF=pod:GetPivot()
+		local forward=Vector3.new(podCF.LookVector.X,0,podCF.LookVector.Z)
+		local right=Vector3.new(podCF.RightVector.X,0,podCF.RightVector.Z)
+		if forward.Magnitude>.01 and right.Magnitude>.01 then
+			forward=forward.Unit
+			right=right.Unit
+			local target=root.Position+Vector3.new(0,1.45,0)+forward*4.5
+			local targetPos=root.Position-forward*6.8+right*6.2+Vector3.new(0,4.3,0)
+			local startCF=camera.CFrame
+			local startFov=camera.FieldOfView
+			local targetCF=CFrame.lookAt(targetPos,target)
+			local started=os.clock()
+			local duration=.34
+			while true do
+				local raw=math.clamp((os.clock()-started)/duration,0,1)
+				local alpha=TweenService:GetValue(raw,Enum.EasingStyle.Quart,Enum.EasingDirection.Out)
+				camera.CFrame=startCF:Lerp(targetCF,alpha)
+				camera.FieldOfView=startFov+(70-startFov)*alpha
+				if raw>=1 then break end
+				RunService.RenderStepped:Wait()
+			end
+		end
+	end
+
+	deploymentPod=nil
+	restoreCamera()
+	setControls(true)
 end
 
 local function enterRun()
-	if not active then restoreCamera(); setControls(true); return end
+	if deploymentActive then return end
+	if not active then
+		destroyPresentationFill()
+		setShowcaseGrade(false)
+		restoreCamera()
+		setControls(true)
+		tweenFlow(1,.35)
+		return
+	end
 	generation+=1; local mine=generation; local cover=tweenFlow(0,.2); cover.Completed:Wait(); if mine~=generation then return end
-	active=false; rootGui.Visible=false; unbindInput(); stopCamera()
+	active=false; rootGui.Visible=false; unbindInput(); stopCamera(); destroyPresentationFill(); setShowcaseGrade(false)
 	local char=player.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart"); local started=os.clock()
 	while hrp and hrp.Parent and os.clock()-started<1.4 do
 		if (hrp.Position-Vector3.new(0,2005,50)).Magnitude>100 then break end
@@ -281,23 +750,74 @@ local function enterRun()
 end
 
 if showcaseRemote then showcaseRemote.OnClientEvent:Connect(function() task.spawn(showShowcase) end) end
-if lobbyPhaseVal then lobbyPhaseVal.Changed:Connect(function(phase)
-	if phase=="SURVIVOR_SELECT" and not active then task.spawn(showShowcase) end
+if deploymentRemote then deploymentRemote.OnClientEvent:Connect(function(action,a,b)
+			if action=="PREPARE" then
+				primeDeploymentTransition()
+			elseif action=="BEGIN" then
+				task.spawn(beginDeployment,a,b)
+		elseif action=="IMPACT" and deploymentActive then
+			impactImpulse=1
+			impactStarted=os.clock()
+		elseif action=="HATCH" and deploymentActive then
+			hatchReframeStarted=os.clock()
+	elseif action=="COMPLETE" then
+		finishDeployment()
+	end
+end) end
+	if lobbyPhaseVal then lobbyPhaseVal.Changed:Connect(function(phase)
+				if phase=="SURVIVOR_SELECT" and not active then
+					deploymentPrimed=false
+					deploymentGroundPosition=nil
+					deploymentGroundForward=nil
+					deploymentGroundRight=nil
+					deploymentLandingPosition=nil
+					task.spawn(showShowcase)
+				elseif phase=="DEPLOYING" then
+					-- Claim the camera immediately. Waiting until BEGIN allowed the showcase
+					-- camera to follow the teleported character into the high-altitude pod.
+					primeDeploymentTransition()
+			elseif phase~="SURVIVOR_SELECT" and active and phase~="RUN" then
+				generation+=1
+				active=false
+			rootGui.Visible=false
+			unbindInput()
+			stopCamera()
+			destroyPresentationFill()
+			setShowcaseGrade(false)
+		end
 end) end
 if gameStartedVal then gameStartedVal.Changed:Connect(function(started)
-	if started then
-		task.spawn(enterRun)
-	elseif active then
-		active=false
-		rootGui.Visible=false
-		unbindInput()
-		stopCamera()
-		setControls(false)
-	end
+		if started then
+			if not deploymentActive then task.spawn(enterRun) end
+			elseif active then
+			active=false
+				rootGui.Visible=false
+				unbindInput()
+				stopCamera()
+				destroyPresentationFill()
+				setShowcaseGrade(false)
+				setControls(false)
+		end
 end) end
 
 if lobbyPhaseVal.Value=="SURVIVOR_SELECT" and not gameStartedVal.Value then
 	task.spawn(showShowcase)
 end
 
-script.Destroying:Connect(function() generation+=1; active=false; unbindInput(); stopCamera(); setControls(true) end)
+script.Destroying:Connect(function()
+	generation+=1
+	deploymentGeneration+=1
+	active=false
+	deploymentActive=false
+	deploymentGroundPosition=nil
+	deploymentGroundForward=nil
+	deploymentGroundRight=nil
+	deploymentLandingPosition=nil
+	unbindInput()
+	stopCamera()
+	stopDeploymentCamera()
+	destroyPresentationFill()
+	setShowcaseGrade(false)
+	if selectGrade and selectGrade.Parent then selectGrade:Destroy() end
+	setControls(true)
+end)

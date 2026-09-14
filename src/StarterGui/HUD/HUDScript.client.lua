@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 pcall(function()
 	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false)
@@ -9,6 +10,7 @@ pcall(function()
 end)
 
 local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 local screenGui = script.Parent
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true
@@ -69,13 +71,14 @@ local goldLabel = make("TextLabel","GoldLabel",currencyPanel,{Size=UDim2.new(1,-
 local runInfo = make("Frame","RunInfo",screenGui,{Size=UDim2.new(0,290,0,84),Position=UDim2.new(1,-312,0,20),BackgroundColor3=C.Ink,BackgroundTransparency=.26,BorderSizePixel=0,ZIndex=4})
 stroke(runInfo,C.AccentSoft,.65,1)
 local timerLabel = make("TextLabel","TimerLabel",runInfo,{Size=UDim2.new(.58,-8,0,32),Position=UDim2.new(0,12,0,8),BackgroundTransparency=1,Text="00:00",TextColor3=C.Text,TextSize=22,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=5})
-local threatLabel = make("TextLabel","ThreatLabel",runInfo,{Size=UDim2.new(.42,-12,0,26),Position=UDim2.new(.58,0,0,10),BackgroundColor3=C.PanelSoft,BackgroundTransparency=.08,BorderSizePixel=0,Text="EASY",TextColor3=C.Accent,TextSize=11,Font=Enum.Font.GothamBold,ZIndex=5})
+local threatLabel = make("TextLabel","ThreatLabel",runInfo,{Size=UDim2.new(.42,-12,0,26),Position=UDim2.new(.58,0,0,10),BackgroundColor3=Color3.fromRGB(76,142,94),BackgroundTransparency=.04,BorderSizePixel=0,Text="EASY",TextColor3=Color3.fromRGB(255,255,255),TextStrokeColor3=Color3.fromRGB(0,0,0),TextStrokeTransparency=.35,TextSize=11,Font=Enum.Font.GothamBold,ZIndex=5})
+local threatStroke = stroke(threatLabel,Color3.fromRGB(42,79,52),.2,1)
 local objectiveLabel = make("TextLabel","ObjectiveLabel",runInfo,{Size=UDim2.new(1,-24,0,30),Position=UDim2.new(0,12,0,45),BackgroundTransparency=1,Text="FIND AND ACTIVATE THE TELEPORTER",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,ZIndex=5})
 
 -- Item list remains readable but no longer occupies a large middle-left dashboard.
 local buffsPanel = make("Frame","BuffsPanel",screenGui,{Size=UDim2.new(0,300,0,118),Position=UDim2.new(0,22,0,72),BackgroundColor3=C.Ink,BackgroundTransparency=.58,BorderSizePixel=0,ZIndex=3})
-local buffsTitle = make("TextLabel","BuffsTitle",buffsPanel,{Size=UDim2.new(1,0,0,18),BackgroundTransparency=1,Text="ITEMS",TextColor3=C.Accent,TextSize=10,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=4})
-local buffsListLabel = make("TextLabel","BuffsList",buffsPanel,{Size=UDim2.new(1,0,1,-20),Position=UDim2.new(0,0,0,20),BackgroundTransparency=1,Text="NO ITEMS",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,TextWrapped=true,ZIndex=4})
+local buffsTitle = make("TextLabel","BuffsTitle",buffsPanel,{Size=UDim2.new(1,-20,0,18),Position=UDim2.new(0,10,0,0),BackgroundTransparency=1,Text="ITEMS",TextColor3=Color3.fromRGB(255,255,255),TextStrokeColor3=Color3.fromRGB(0,0,0),TextStrokeTransparency=.15,TextSize=10,Font=Enum.Font.GothamBold,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=4})
+local buffsListLabel = make("TextLabel","BuffsList",buffsPanel,{Size=UDim2.new(1,-20,1,-20),Position=UDim2.new(0,10,0,20),BackgroundTransparency=1,Text="NO ITEMS",TextColor3=Color3.fromRGB(255,255,255),TextStrokeColor3=Color3.fromRGB(0,0,0),TextStrokeTransparency=.12,TextSize=10,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,TextWrapped=true,ZIndex=4})
 
 -- Health anchors the lower-left without a large saturated green block.
 local healthBG = make("Frame","HealthBarBG",screenGui,{Size=UDim2.new(0,320,0,38),Position=UDim2.new(0,22,1,-62),BackgroundColor3=C.Ink,BackgroundTransparency=.18,BorderSizePixel=0,ZIndex=5})
@@ -113,10 +116,14 @@ local bannerDesc = make("TextLabel","BannerDesc",pickupBanner,{Size=UDim2.new(1,
 
 local statsFrame = make("Frame","StatsFrame",screenGui,{Size=UDim2.new(0,700,0,420),Position=UDim2.new(.5,-350,.5,-210),BackgroundColor3=C.Ink,BackgroundTransparency=.04,BorderSizePixel=0,Visible=false,ZIndex=30})
 stroke(statsFrame,C.Danger,.28,1)
-local statsTitle = make("TextLabel","StatsTitle",statsFrame,{Size=UDim2.new(1,-36,0,64),Position=UDim2.new(0,18,0,14),BackgroundTransparency=1,Text="RUN TERMINATED",TextColor3=C.Text,TextSize=28,Font=Enum.Font.GothamBlack,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=31})
+local statsTitle = make("TextLabel","StatsTitle",statsFrame,{Size=UDim2.new(1,-36,0,64),Position=UDim2.new(0,18,0,14),BackgroundTransparency=1,Text="MISSION FAILED",TextColor3=C.Text,TextSize=28,Font=Enum.Font.GothamBlack,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=31})
 local statsSubtitle = make("TextLabel","StatsSubtitle",statsFrame,{Size=UDim2.new(1,-36,0,22),Position=UDim2.new(0,18,0,65),BackgroundTransparency=1,Text="SQUAD STATUS // SECTOR-0",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=31})
 local statsContainer = make("Frame","StatsContainer",statsFrame,{Size=UDim2.new(1,-36,0,250),Position=UDim2.new(0,18,0,102),BackgroundTransparency=1,ZIndex=31})
 local returnBtn = make("TextButton","ReturnBtn",statsFrame,{Size=UDim2.new(0,250,0,46),Position=UDim2.new(1,-268,1,-58),BackgroundColor3=Color3.fromRGB(190,214,221),BorderSizePixel=0,Text="RETURN TO LOBBY",TextColor3=Color3.fromRGB(18,30,36),TextSize=13,Font=Enum.Font.GothamBold,ZIndex=32})
+
+local spectatePanel = make("Frame","SpectatePanel",screenGui,{Size=UDim2.new(0,340,0,44),Position=UDim2.new(.5,-170,0,126),BackgroundColor3=C.Ink,BackgroundTransparency=.18,BorderSizePixel=0,Visible=false,ZIndex=20})
+stroke(spectatePanel,C.AccentSoft,.45,1)
+local spectateLabel = make("TextLabel","SpectateLabel",spectatePanel,{Size=UDim2.new(1,-20,1,0),Position=UDim2.new(0,10,0,0),BackgroundTransparency=1,Text="",TextColor3=C.Text,TextSize=11,Font=Enum.Font.GothamBold,ZIndex=21})
 
 local function updateAbilityBarNames()
 	local raw = player:GetAttribute("SelectedClass") or "Gunner"
@@ -130,12 +137,44 @@ local function updateAbilityBarNames()
 	classLabel.Text=string.upper(raw)
 end
 
+local DIFFICULTY_STYLES = {
+	["EASY"] = {
+		Fill = Color3.fromRGB(76,142,94),
+		Border = Color3.fromRGB(42,79,52),
+	},
+	["MEDIUM"] = {
+		Fill = Color3.fromRGB(186,149,54),
+		Border = Color3.fromRGB(105,82,28),
+	},
+	["HARD"] = {
+		Fill = Color3.fromRGB(201,105,44),
+		Border = Color3.fromRGB(113,57,23),
+	},
+	["VERY HARD"] = {
+		Fill = Color3.fromRGB(183,63,55),
+		Border = Color3.fromRGB(101,31,27),
+	},
+	["CRITICAL / IMPOSSIBLE"] = {
+		Fill = Color3.fromRGB(145,45,86),
+		Border = Color3.fromRGB(75,22,44),
+	},
+}
+
+local function updateDifficultyStyle(threat)
+	local style = DIFFICULTY_STYLES[threat] or DIFFICULTY_STYLES["EASY"]
+	threatLabel.BackgroundColor3 = style.Fill
+	threatLabel.TextColor3 = Color3.fromRGB(255,255,255)
+	threatLabel.TextSize = threat == "CRITICAL / IMPOSSIBLE" and 8 or 11
+	if threatStroke then threatStroke.Color = style.Border end
+end
+
 local function updateHUDDisplay()
 	local sec=elapsedTimeVal and elapsedTimeVal.Value or 0
-	local threat=threatTextVal and threatTextVal.Value or "EASY"
+	local threat=string.upper(tostring(threatTextVal and threatTextVal.Value or "EASY"))
 	local statsFolder=player:FindFirstChild("leaderstats")
 	local gold=(statsFolder and statsFolder:FindFirstChild("Gold")) and statsFolder.Gold.Value or 0
-	timerLabel.Text=formatTime(sec); threatLabel.Text=string.upper(tostring(threat)); goldLabel.Text="$"..tostring(gold)
+	timerLabel.Text=formatTime(sec); threatLabel.Text=threat; goldLabel.Text="$"..tostring(gold)
+	updateDifficultyStyle(threat)
 	updateAbilityBarNames()
 end
 
@@ -191,6 +230,110 @@ local function renderEndStats()
 	end
 end
 
+local spectating = false
+local spectateTarget = nil
+
+local function getHumanoid(targetPlayer)
+	local character = targetPlayer and targetPlayer.Character
+	return character and character:FindFirstChildOfClass("Humanoid") or nil
+end
+
+local function getLivingTeammates()
+	local living = {}
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= player then
+			local humanoid = getHumanoid(other)
+			if humanoid and humanoid.Health > 0 then
+				table.insert(living, other)
+			end
+		end
+	end
+	return living
+end
+
+local function stopSpectating(restoreLocalCamera)
+	spectating = false
+	spectateTarget = nil
+	spectatePanel.Visible = false
+
+	if restoreLocalCamera then
+		local humanoid = getHumanoid(player)
+		if humanoid and humanoid.Health > 0 then
+			camera.CameraType = Enum.CameraType.Custom
+			camera.CameraSubject = humanoid
+		end
+	end
+end
+
+local function showMissionFailed()
+	stopSpectating(false)
+	statsTitle.Text = "MISSION FAILED"
+	renderEndStats()
+	statsFrame.Visible = true
+end
+
+local function evaluateDeathState()
+	if not gameStartedVal or not gameStartedVal.Value then return end
+
+	local localHumanoid = getHumanoid(player)
+	if localHumanoid and localHumanoid.Health > 0 then
+		return
+	end
+
+	local living = getLivingTeammates()
+	if #living == 0 then
+		showMissionFailed()
+		return
+	end
+
+	statsFrame.Visible = false
+	spectating = true
+
+	local targetStillAlive = false
+	if spectateTarget then
+		for _, livingPlayer in ipairs(living) do
+			if livingPlayer == spectateTarget then
+				targetStillAlive = true
+				break
+			end
+		end
+	end
+	if not targetStillAlive then
+		spectateTarget = living[1]
+	end
+
+	local targetHumanoid = getHumanoid(spectateTarget)
+	if targetHumanoid then
+		camera.CameraType = Enum.CameraType.Custom
+		camera.CameraSubject = targetHumanoid
+		spectateLabel.Text = "SPECTATING // " .. string.upper(spectateTarget.DisplayName)
+		spectatePanel.Visible = true
+	end
+end
+
+local function watchPlayerDeath(targetPlayer)
+	local function watchCharacter(character)
+		task.spawn(function()
+			local humanoid = character:WaitForChild("Humanoid", 10)
+			if not humanoid then return end
+			humanoid.Died:Connect(function()
+				task.defer(evaluateDeathState)
+			end)
+		end)
+	end
+
+	if targetPlayer.Character then watchCharacter(targetPlayer.Character) end
+	targetPlayer.CharacterAdded:Connect(watchCharacter)
+end
+
+for _, observedPlayer in ipairs(Players:GetPlayers()) do
+	watchPlayerDeath(observedPlayer)
+end
+Players.PlayerAdded:Connect(watchPlayerDeath)
+Players.PlayerRemoving:Connect(function()
+	task.defer(evaluateDeathState)
+end)
+
 local function updateHealth(humanoid)
 	local hp=math.max(0,humanoid.Health); local max=math.max(1,humanoid.MaxHealth)
 	healthFill.Size=UDim2.new(math.clamp(hp/max,0,1),0,1,0); hpLabel.Text=math.floor(hp).." / "..math.floor(max)
@@ -204,8 +347,8 @@ local function bindCharacter(character)
 	humanoid.HealthChanged:Connect(function() if boundHumanoid==humanoid then updateHealth(humanoid) end end)
 	humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function() if boundHumanoid==humanoid then updateHealth(humanoid) end end)
 	humanoid.Died:Connect(function()
-		if gameStartedVal and gameStartedVal.Value then renderEndStats(); statsFrame.Visible=true end
-	end)
+			if gameStartedVal and gameStartedVal.Value then task.defer(evaluateDeathState) end
+		end)
 	task.delay(.5,function()
 		if not humanoid.Parent then return end
 		local gun=player.Backpack:FindFirstChildOfClass("Tool") or character:FindFirstChildOfClass("Tool")
@@ -247,10 +390,14 @@ end)
 
 if gameStartedVal then
 	gameStartedVal.Changed:Connect(function(started)
-		screenGui.Enabled=started==true
-		if not started then statsFrame.Visible=false; teleporterPanel.Visible=false end
-		if started and boundHumanoid then updateHealth(boundHumanoid) end
-	end)
+			screenGui.Enabled=started==true
+			if not started then
+				statsFrame.Visible=false
+				teleporterPanel.Visible=false
+				stopSpectating(false)
+			end
+			if started and boundHumanoid then updateHealth(boundHumanoid) end
+		end)
 end
 
 screenGui.Enabled=gameStartedVal and gameStartedVal.Value==true or false

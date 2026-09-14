@@ -21,6 +21,8 @@ local currentTeleporter = nil
 
 local function resetAndReturnToLobby()
 	chargeVal.Value = 0; activeVal.Value = false; completeVal.Value = false; currentStageVal.Value = 1
+	local pods = Workspace:FindFirstChild("ByteforceDropPods")
+	if pods then pods:Destroy() end
 	for _, p in ipairs(Players:GetPlayers()) do
 		p:SetAttribute("IsReady", false)
 		if p.Character then
@@ -64,6 +66,8 @@ end
 
 -- LOADS NEW MAP, ANCHORS ALL PARTS, AND FINDS SAFE FLOOR SURFACE
 local function loadAndPrepareMap(mapTemplate)
+	local pods = Workspace:FindFirstChild("ByteforceDropPods")
+	if pods then pods:Destroy() end
 	if Workspace:FindFirstChild("Map") then Workspace.Map:Destroy() end
 
 	local newMap = mapTemplate:Clone()

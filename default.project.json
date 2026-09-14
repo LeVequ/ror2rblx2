@@ -7,6 +7,13 @@
       "$ignoreUnknownInstances": true,
       "$path": "src/ReplicatedStorage"
     },
+    "Lighting": {
+      "$className": "Lighting",
+      "$ignoreUnknownInstances": true,
+      "Sky": {
+        "$className": "Sky"
+      }
+    },
     "ServerScriptService": {
       "$className": "ServerScriptService",
       "$ignoreUnknownInstances": true,

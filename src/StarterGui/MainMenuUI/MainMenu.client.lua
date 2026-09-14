@@ -11,6 +11,7 @@ local player = Players.LocalPlayer
 local screenGui = script.Parent
 local camera = workspace.CurrentCamera
 local gameStartedVal = ReplicatedStorage:WaitForChild("GameStarted", 10)
+local lobbyPhaseVal = ReplicatedStorage:WaitForChild("LobbyPhase", 10)
 
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true
@@ -53,6 +54,7 @@ end)
 local hiddenCharacterState = {}
 local characterConnections = {}
 local playerConnections = {}
+local playerAddedConnection = nil
 
 local function rememberAndHideCharacterObject(object)
 	if hiddenCharacterState[object] then return end
@@ -102,13 +104,17 @@ local function watchPlayerCharacter(targetPlayer)
 	end)
 end
 
-for _, targetPlayer in ipairs(Players:GetPlayers()) do
-	watchPlayerCharacter(targetPlayer)
+local function startWatchingCharacters()
+	for _, targetPlayer in ipairs(Players:GetPlayers()) do
+		watchPlayerCharacter(targetPlayer)
+	end
+	if playerAddedConnection then playerAddedConnection:Disconnect() end
+	playerAddedConnection = Players.PlayerAdded:Connect(function(targetPlayer)
+		watchPlayerCharacter(targetPlayer)
+	end)
 end
 
-local playerAddedConnection = Players.PlayerAdded:Connect(function(targetPlayer)
-	watchPlayerCharacter(targetPlayer)
-end)
+startWatchingCharacters()
 
 local function restoreCharacterVisibility()
 	for character, connection in pairs(characterConnections) do
@@ -208,6 +214,9 @@ local sceneFolder = create("Folder", "MainMenuScene_Client", workspace)
 -- away so real characters, lobby geometry, and showcase props can never drift into
 -- the title camera's frustum.
 local MENU_ORIGIN = Vector3.new(24000, 9200, -24000)
+local LOBBY_CENTER = MENU_ORIGIN + Vector3.new(0, 4, -230)
+local LOBBY_CAMERA_POSITION = MENU_ORIGIN + Vector3.new(0, 8.2, -200)
+local LOBBY_CAMERA_FOCUS = LOBBY_CENTER + Vector3.new(0, 0.6, 0)
 
 local function scenePart(name, size, cframe, color, material, transparency, shape)
 	local part = create("Part", name, sceneFolder, {
@@ -226,11 +235,26 @@ local function scenePart(name, size, cframe, color, material, transparency, shap
 	return part
 end
 
+local function sceneWedge(name, size, cframe, color, material, transparency)
+	return create("WedgePart", name, sceneFolder, {
+		Anchored = true,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+		CastShadow = true,
+		Size = size,
+		CFrame = cframe,
+		Color = color,
+		Material = material or Enum.Material.Slate,
+		Transparency = transparency or 0,
+	})
+end
+
 local baseY = MENU_ORIGIN.Y
 scenePart(
 	"DistantGround",
-	Vector3.new(1250, 8, 1250),
-	CFrame.new(MENU_ORIGIN + Vector3.new(0, -4, 250)),
+	Vector3.new(1800, 8, 1800),
+	CFrame.new(MENU_ORIGIN + Vector3.new(0, -4, 40)),
 	Color3.fromRGB(8, 13, 18),
 	Enum.Material.Slate
 )
@@ -298,6 +322,163 @@ for index, data in ipairs(spires) do
 	)
 end
 
+-- The title and squad-staging cameras occupy opposite sides of the same frontend
+-- space.  Keep a low-detail industrial skyline all the way around that space so a
+-- camera turn never exposes the unfinished edge of the diorama.  These structures
+-- are intentionally dark and distant; they should read as scale and silhouette,
+-- not as new focal points competing with the drop pod / squad lineup.
+local skylineSpecs = {
+	{-165, 650, 54, 118, 50, -8},
+	{-145, 620, 44, 86, 44, 7},
+	{-126, 600, 56, 146, 58, -5},
+	{-108, 470, 52, 72, 58, 9},
+	{-88, 530, 88, 128, 82, -7},
+	{-66, 475, 62, 94, 66, 5},
+	{-46, 550, 76, 156, 72, -4},
+	{-24, 505, 58, 88, 58, 6},
+	{18, 560, 78, 116, 76, -6},
+	{42, 500, 64, 92, 64, 5},
+	{66, 545, 84, 142, 80, -7},
+	{92, 485, 54, 82, 58, 8},
+	{116, 555, 72, 130, 70, -5},
+	{138, 620, 46, 98, 48, 7},
+	{156, 670, 58, 152, 56, -6},
+	{177, 630, 48, 106, 50, 4},
+}
+
+for index, data in ipairs(skylineSpecs) do
+	local angle, radius, width, height, depth, yaw = table.unpack(data)
+	-- Leave the staging-camera sector around -Z free for the authored industrial
+	-- complexes below.  The generic ring works well from the title camera, but on
+	-- the squad side its large rectangular faces read like three floating slabs.
+	if math.abs(angle) >= 142 then
+		continue
+	end
+	local radians = math.rad(angle)
+	local x = math.sin(radians) * radius
+	local z = math.cos(radians) * radius
+	local buildingColor = Color3.fromRGB(12 + (index % 4) * 2, 19 + (index % 5) * 2, 24 + (index % 4) * 3)
+	local rootFrame = CFrame.new(MENU_ORIGIN + Vector3.new(x, height * 0.5 - 1, z))
+		* CFrame.Angles(0, math.rad(angle + yaw), 0)
+
+	scenePart(
+		"PerimeterBuilding" .. index,
+		Vector3.new(width, height, depth),
+		rootFrame,
+		buildingColor,
+		Enum.Material.Metal
+	)
+
+	-- Break up the rectangular silhouettes with an offset roof block and occasional
+	-- antenna.  The details are large on purpose so they survive the heavy fog/grade.
+	local roofWidth = math.max(16, width * 0.46)
+	local roofDepth = math.max(14, depth * 0.44)
+	scenePart(
+		"PerimeterRoof" .. index,
+		Vector3.new(roofWidth, 9 + (index % 3) * 3, roofDepth),
+		rootFrame * CFrame.new((index % 2 == 0 and 1 or -1) * width * 0.16, height * 0.5 + 5, 0),
+		Color3.fromRGB(20 + (index % 3) * 3, 29 + (index % 4) * 3, 35 + (index % 4) * 3),
+		Enum.Material.Metal
+	)
+
+	if index % 3 == 0 then
+		scenePart(
+			"PerimeterAntenna" .. index,
+			Vector3.new(4, 34 + (index % 4) * 8, 4),
+			rootFrame * CFrame.new(-width * 0.18, height * 0.5 + 21, depth * 0.08) * CFrame.Angles(0, 0, math.rad(index % 2 == 0 and 3 or -4)),
+			Color3.fromRGB(38, 51, 58),
+			Enum.Material.Metal
+		)
+	end
+end
+
+-- Squad-staging skyline.  These are deliberately assembled from several large
+-- volumes instead of one box each, so the silhouettes read as actual facilities
+-- through the opening above the staging wall.  Keep the broad bases low enough to
+-- disappear behind the bay facade while towers / roof machinery remain visible.
+-- Pull the authored squad skyline farther away from the staging platform.  The
+-- extra distance makes the stepped roofs, tower caps, stacks and antennae visible
+-- above the lower bay facade instead of reading as cropped blocks.
+local stagingSkylineZ = -760
+local stagingDark = Color3.fromRGB(8, 14, 19)
+local stagingMid = Color3.fromRGB(13, 22, 28)
+local stagingEdge = Color3.fromRGB(22, 34, 40)
+
+local function stagingBuildingPart(name, offset, size, color, yaw)
+	return scenePart(
+		"StagingSkyline_" .. name,
+		size,
+		CFrame.new(MENU_ORIGIN + Vector3.new(offset.X, offset.Y, stagingSkylineZ + offset.Z))
+			* CFrame.Angles(0, math.rad(yaw or 0), 0),
+		color or stagingDark,
+		Enum.Material.Metal
+	)
+end
+
+-- Left refinery / utility block.
+stagingBuildingPart("Left_Base", Vector3.new(-178, 24, 10), Vector3.new(126, 48, 74), stagingDark, -4)
+stagingBuildingPart("Left_Shoulder", Vector3.new(-206, 58, 6), Vector3.new(54, 36, 58), stagingMid, -4)
+stagingBuildingPart("Left_Tower", Vector3.new(-160, 78, 4), Vector3.new(34, 96, 38), stagingMid, 2)
+stagingBuildingPart("Left_TowerCap", Vector3.new(-158, 130, 3), Vector3.new(46, 10, 46), stagingEdge, 2)
+stagingBuildingPart("Left_Stack", Vector3.new(-124, 93, 1), Vector3.new(13, 126, 13), stagingEdge, -2)
+stagingBuildingPart("Left_Antenna", Vector3.new(-161, 165, 2), Vector3.new(4, 60, 4), stagingEdge, 0)
+
+-- Center communications / control complex.  Offset the two towers so the center
+-- cyan staging light never visually becomes an extension of either silhouette.
+stagingBuildingPart("Center_Base", Vector3.new(-12, 22, 32), Vector3.new(142, 44, 72), stagingDark, 2)
+stagingBuildingPart("Center_LeftTower", Vector3.new(-52, 71, 26), Vector3.new(38, 98, 42), stagingMid, -2)
+stagingBuildingPart("Center_RightTower", Vector3.new(34, 59, 18), Vector3.new(48, 74, 50), stagingMid, 3)
+stagingBuildingPart("Center_LeftCap", Vector3.new(-55, 124, 25), Vector3.new(54, 11, 52), stagingEdge, -2)
+stagingBuildingPart("Center_CommsMast", Vector3.new(-38, 166, 24), Vector3.new(5, 78, 5), stagingEdge, 0)
+stagingBuildingPart("Center_RoofUnit", Vector3.new(47, 102, 18), Vector3.new(24, 18, 25), stagingEdge, 3)
+
+-- Right fabrication / hangar block with a stepped roofline and narrow exhaust.
+stagingBuildingPart("Right_Base", Vector3.new(176, 26, -2), Vector3.new(136, 52, 78), stagingDark, 5)
+stagingBuildingPart("Right_Upper", Vector3.new(156, 65, -4), Vector3.new(80, 40, 58), stagingMid, 5)
+stagingBuildingPart("Right_Tower", Vector3.new(210, 86, -10), Vector3.new(36, 102, 40), stagingMid, -3)
+stagingBuildingPart("Right_TowerCap", Vector3.new(211, 141, -10), Vector3.new(48, 9, 49), stagingEdge, -3)
+stagingBuildingPart("Right_Exhaust", Vector3.new(125, 106, 0), Vector3.new(12, 104, 12), stagingEdge, 1)
+
+-- Farther silhouettes bridge the gaps between the three authored complexes so the
+-- skyline continues rather than reading as three isolated props.
+local farStagingMasses = {
+	{-285, 18, -145, 118, 36, 68, -5},
+	{-92, 16, -170, 96, 32, 62, 4},
+	{92, 20, -160, 112, 40, 66, -3},
+	{292, 17, -150, 126, 34, 70, 6},
+}
+for index, data in ipairs(farStagingMasses) do
+	local x, y, z, sx, sy, sz, yaw = table.unpack(data)
+	scenePart(
+		"StagingFarMass" .. index,
+		Vector3.new(sx, sy, sz),
+		CFrame.new(MENU_ORIGIN + Vector3.new(x, y, stagingSkylineZ + z)) * CFrame.Angles(0, math.rad(yaw), 0),
+		Color3.fromRGB(7, 12, 16),
+		Enum.Material.Metal
+	)
+end
+
+-- A second, lower ring of broad masses hides the horizon gaps between buildings.
+-- Their rotation follows the circle, so the skyline remains convincing from both
+-- the +Z title camera and the -Z squad-staging camera.
+for index = 1, 12 do
+	local angle = (index - 1) * 30 + 15
+	local radians = math.rad(angle)
+	local radius = 650 + (index % 3) * 34
+	local x = math.sin(radians) * radius
+	local z = math.cos(radians) * radius
+	local width = 160 + (index % 4) * 24
+	local height = 38 + (index % 3) * 11
+	local depth = 110 + (index % 2) * 34
+	scenePart(
+		"PerimeterMass" .. index,
+		Vector3.new(width, height, depth),
+		CFrame.new(MENU_ORIGIN + Vector3.new(x, height * 0.5 - 2, z)) * CFrame.Angles(0, radians, math.rad((index % 2 == 0) and 2 or -2)),
+		Color3.fromRGB(10 + (index % 3) * 2, 16 + (index % 4) * 2, 21 + (index % 3) * 3),
+		Enum.Material.Slate
+	)
+end
+
 local moon = scenePart(
 	"SignalMoon",
 	Vector3.new(138, 138, 138),
@@ -356,27 +537,137 @@ for index = 1, 3 do
 	arm.CanCollide = false
 end
 
--- Secondary focal shape: a low wreck silhouette offset to the right.
-scenePart(
-	"WreckHull",
-	Vector3.new(68, 18, 30),
-	CFrame.new(MENU_ORIGIN + Vector3.new(248, 15, 95)) * CFrame.Angles(math.rad(7), math.rad(-20), math.rad(3)),
-	Color3.fromRGB(17, 27, 33),
+-- Foreground hero object: an oversized deployment pod planted into the right side
+-- of the frame.  Its much shallower Z position gives it visibly stronger camera
+-- parallax than the relay / skyline and makes the title screen feel like an actual
+-- place rather than a flat collection of silhouettes.
+local podRoot = CFrame.new(MENU_ORIGIN + Vector3.new(-78, 35, 24))
+	* CFrame.Angles(math.rad(-3), math.rad(-14), math.rad(5))
+
+local function podPart(name, size, localCFrame, color, material, transparency, shape)
+	return scenePart(
+		"DropPod_" .. name,
+		size,
+		podRoot * localCFrame,
+		color,
+		material,
+		transparency,
+		shape
+	)
+end
+
+local function podWedge(name, size, localCFrame, color, material, transparency)
+	return sceneWedge(
+		"DropPod_" .. name,
+		size,
+		podRoot * localCFrame,
+		color,
+		material,
+		transparency
+	)
+end
+
+local podDark = Color3.fromRGB(16, 25, 31)
+local podMetal = Color3.fromRGB(29, 42, 49)
+local podArmor = Color3.fromRGB(39, 55, 63)
+local podEdge = Color3.fromRGB(57, 76, 84)
+local podCyan = Color3.fromRGB(103, 207, 229)
+local podAmber = Color3.fromRGB(225, 155, 73)
+
+-- Main pressure hull and upper armored cap.
+podPart("Hull", Vector3.new(86, 42, 48), CFrame.new(0, 0, 0), podMetal, Enum.Material.Metal)
+podPart("LowerHull", Vector3.new(72, 22, 52), CFrame.new(0, -27, 2), podDark, Enum.Material.Metal)
+podPart("TopCap", Vector3.new(64, 16, 45), CFrame.new(0, 29, 1), podArmor, Enum.Material.Metal)
+
+-- Tapered shoulders give the pod a recognizable capsule / drop-ship silhouette.
+podWedge(
+	"LeftShoulder",
+	Vector3.new(24, 35, 49),
+	CFrame.new(-51, 4, 0) * CFrame.Angles(0, math.rad(90), math.rad(-8)),
+	podArmor,
 	Enum.Material.Metal
 )
-local wreckLight = scenePart(
-	"WreckLight",
-	Vector3.new(10, 3, 3),
-	CFrame.new(MENU_ORIGIN + Vector3.new(226, 21, 83)) * CFrame.Angles(0, math.rad(-20), 0),
-	Color3.fromRGB(119, 211, 230),
-	Enum.Material.Neon,
-	0.16
+podWedge(
+	"RightShoulder",
+	Vector3.new(24, 35, 49),
+	CFrame.new(51, 4, 0) * CFrame.Angles(0, math.rad(-90), math.rad(8)),
+	podArmor,
+	Enum.Material.Metal
 )
-create("PointLight", "WreckGlow", wreckLight, {
-	Brightness = 1.8,
-	Color = Color3.fromRGB(112, 202, 222),
-	Range = 44,
+
+-- Forward hatch faces the camera. The layered inset is deliberately broad so it
+-- remains legible behind the menu's color grade at normal desktop resolutions.
+podPart("HatchFrame", Vector3.new(58, 36, 5), CFrame.new(0, 1, -26), podEdge, Enum.Material.Metal)
+podPart("Hatch", Vector3.new(50, 29, 3), CFrame.new(0, 1, -29), podDark, Enum.Material.Metal)
+podPart("HatchInset", Vector3.new(34, 20, 1.5), CFrame.new(0, 1, -31.2), Color3.fromRGB(22, 34, 40), Enum.Material.Metal)
+podPart("HatchBarTop", Vector3.new(42, 2, 1.8), CFrame.new(0, 11, -32.2), podEdge, Enum.Material.Metal)
+podPart("HatchBarBottom", Vector3.new(42, 2, 1.8), CFrame.new(0, -9, -32.2), podEdge, Enum.Material.Metal)
+
+-- Small emissive strips carry the same cyan language as the ZERO SIGNAL logo,
+-- while one warm warning lamp keeps the whole scene from collapsing into blue.
+local leftStatus = podPart("StatusLeft", Vector3.new(3, 23, 1.2), CFrame.new(-24, 1, -32.5), podCyan, Enum.Material.Neon, 0.08)
+local rightStatus = podPart("StatusRight", Vector3.new(3, 23, 1.2), CFrame.new(24, 1, -32.5), podCyan, Enum.Material.Neon, 0.08)
+local warningLamp = podPart("WarningLamp", Vector3.new(7, 4, 2), CFrame.new(28, 22, -25.8), podAmber, Enum.Material.Neon, 0.04)
+
+create("PointLight", "DropPodCyanGlow", leftStatus, {
+	Brightness = 2.1,
+	Color = podCyan,
+	Range = 54,
 })
+create("PointLight", "DropPodCyanFill", rightStatus, {
+	Brightness = 1.35,
+	Color = podCyan,
+	Range = 42,
+})
+create("PointLight", "DropPodWarningGlow", warningLamp, {
+	Brightness = 2.35,
+	Color = podAmber,
+	Range = 34,
+})
+
+-- Armor rails, roof machinery and landing hardware keep the silhouette chunky
+-- and asymmetric instead of reading as one large rectangular block.
+podPart("LeftRail", Vector3.new(8, 52, 12), CFrame.new(-43, 2, 9) * CFrame.Angles(0, 0, math.rad(-4)), podDark, Enum.Material.Metal)
+podPart("RightRail", Vector3.new(8, 48, 12), CFrame.new(43, 0, 9) * CFrame.Angles(0, 0, math.rad(5)), podDark, Enum.Material.Metal)
+podPart("RoofSpine", Vector3.new(13, 19, 17), CFrame.new(-11, 42, 5) * CFrame.Angles(0, 0, math.rad(-7)), podEdge, Enum.Material.Metal)
+podPart("RoofAntenna", Vector3.new(4, 22, 4), CFrame.new(-15, 57, 5) * CFrame.Angles(0, 0, math.rad(-13)), podEdge, Enum.Material.Metal)
+podPart("RearPack", Vector3.new(30, 31, 15), CFrame.new(30, 6, 30), podDark, Enum.Material.Metal)
+
+podPart("LeftFoot", Vector3.new(33, 9, 35), CFrame.new(-34, -47, 8) * CFrame.Angles(0, math.rad(7), 0), podDark, Enum.Material.Metal)
+podPart("RightFoot", Vector3.new(33, 9, 35), CFrame.new(34, -47, 8) * CFrame.Angles(0, math.rad(-8), 0), podDark, Enum.Material.Metal)
+podPart("LeftStrut", Vector3.new(8, 29, 8), CFrame.new(-34, -34, 7) * CFrame.Angles(0, 0, math.rad(-9)), podEdge, Enum.Material.Metal)
+podPart("RightStrut", Vector3.new(8, 29, 8), CFrame.new(34, -34, 7) * CFrame.Angles(0, 0, math.rad(10)), podEdge, Enum.Material.Metal)
+
+-- Impact scar and debris visually attach the pod to the terrain. The cylinder is
+-- intentionally shallow and dark; it should read as a disturbed landing crater,
+-- not as a literal glowing platform.
+scenePart(
+	"DropPod_ImpactScar",
+	Vector3.new(2.4, 142, 142),
+		CFrame.new(MENU_ORIGIN + Vector3.new(-78, 3.1, 27)) * CFrame.Angles(0, 0, math.rad(90)),
+	Color3.fromRGB(12, 18, 22),
+	Enum.Material.Slate,
+	0.18,
+	Enum.PartType.Cylinder
+)
+
+local podDebris = {
+	{-87, 4, -13, 28, 10, 19, -17},
+	{-66, 7, 30, 18, 14, 16, 23},
+	{76, 5, 18, 24, 9, 21, 14},
+	{91, 8, -24, 15, 16, 13, -29},
+}
+
+for index, data in ipairs(podDebris) do
+	local x, y, z, sx, sy, sz, rot = table.unpack(data)
+	podPart(
+		"Debris" .. index,
+		Vector3.new(sx, sy, sz),
+		CFrame.new(x, -50 + y, z) * CFrame.Angles(math.rad(rot * 0.18), math.rad(rot), math.rad(rot * 0.31)),
+		index % 2 == 0 and podMetal or podDark,
+		index % 2 == 0 and Enum.Material.Metal or Enum.Material.Slate
+	)
+end
 
 for index = 1, 11 do
 	local x = -335 + index * 58
@@ -432,10 +723,10 @@ create("UIGradient", "Gradient", leftShade, {
 })
 
 local bottomShade = create("Frame", "BottomShade", root, {
-	Size = UDim2.fromScale(1, 0.42),
-	Position = UDim2.fromScale(0, 0.58),
+	Size = UDim2.fromScale(1, 0.35),
+	Position = UDim2.fromScale(0, 0.65),
 	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-	BackgroundTransparency = 0.28,
+	BackgroundTransparency = 0.48,
 	BorderSizePixel = 0,
 	ZIndex = 1,
 })
@@ -443,7 +734,7 @@ local bottomGradient = create("UIGradient", "Gradient", bottomShade, {
 	Rotation = 90,
 	Transparency = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(1, 0.1),
+		NumberSequenceKeypoint.new(1, 0.42),
 	}),
 })
 
@@ -685,7 +976,7 @@ local sectionBody = create("TextLabel", "SectionBody", sectionPanel, {
 	ZIndex = 9,
 })
 
-create("TextLabel", "Build", root, {
+local buildLabel = create("TextLabel", "Build", root, {
 	Size = UDim2.new(0, 310, 0, 26),
 	Position = UDim2.new(0, 24, 1, -42),
 	BackgroundTransparency = 1,
@@ -697,7 +988,7 @@ create("TextLabel", "Build", root, {
 	ZIndex = 4,
 })
 
-create("TextLabel", "InputHint", root, {
+local inputHint = create("TextLabel", "InputHint", root, {
 	Size = UDim2.new(0, 430, 0, 28),
 	Position = UDim2.new(1, -454, 1, -44),
 	BackgroundTransparency = 1,
@@ -844,60 +1135,103 @@ local cameraBindName = "ByteforceMainMenuCamera"
 local startTime = os.clock()
 camera.CameraType = Enum.CameraType.Scriptable
 
-RunService:BindToRenderStep(cameraBindName, Enum.RenderPriority.Camera.Value + 1, function()
-	if transitioning or not screenGui.Enabled then return end
-
+local function menuCameraFrame()
 	local t = os.clock() - startTime
 	local mouse = UserInputService:GetMouseLocation()
 	local viewport = camera.ViewportSize
 	local xRatio = viewport.X > 0 and (mouse.X / viewport.X - 0.5) or 0
 	local yRatio = viewport.Y > 0 and (mouse.Y / viewport.Y - 0.5) or 0
 
-	-- Lower, slower framing: foreground rock silhouettes occupy the bottom edge,
-	-- while the relay and skyline sit in the middle distance. Mouse parallax is
-	-- deliberately restrained so the scene feels cinematic instead of floaty.
 	local position = MENU_ORIGIN + Vector3.new(
 		math.sin(t * 0.072) * 3.6,
 		52 + math.sin(t * 0.05) * 1.15,
 		-138 + math.cos(t * 0.06) * 2.0
 	)
 	local target = MENU_ORIGIN + Vector3.new(
-		xRatio * 5.5 + math.sin(t * 0.035) * 3.2,
+		-10 + xRatio * 5.5 + math.sin(t * 0.035) * 3.2,
 		34 - yRatio * 2.7,
-		166
+		154
 	)
-	camera.CFrame = CFrame.lookAt(position, target)
-	camera.FieldOfView = 61
+	return CFrame.lookAt(position, target), t
+end
 
-	for _, object in ipairs(sceneFolder:GetChildren()) do
-		local baseObjectY = object:GetAttribute("MenuBaseY")
-		if baseObjectY then
-			local offset = math.sin(t * 0.38 + object.Position.X * 0.018) * 1.6
-			local current = object.Position
-			object.Position = Vector3.new(current.X, baseObjectY + offset, current.Z)
+local function bindMenuCamera()
+	RunService:UnbindFromRenderStep(cameraBindName)
+	RunService:BindToRenderStep(cameraBindName, Enum.RenderPriority.Camera.Value + 1, function()
+		if transitioning or not screenGui.Enabled then return end
+
+		local frame, t = menuCameraFrame()
+		camera.CFrame = frame
+		camera.FieldOfView = 61
+
+		for _, object in ipairs(sceneFolder:GetChildren()) do
+			local baseObjectY = object:GetAttribute("MenuBaseY")
+			if baseObjectY then
+				local offset = math.sin(t * 0.38 + object.Position.X * 0.018) * 1.6
+				local current = object.Position
+				object.Position = Vector3.new(current.X, baseObjectY + offset, current.Z)
+			end
 		end
-	end
-end)
+	end)
+end
 
-local function restoreWorldPresentation()
+bindMenuCamera()
+
+local titleOwnershipReleased = false
+local frontendSceneTornDown = false
+
+local function releaseTitleOwnershipForLobby()
+	if titleOwnershipReleased then return end
+	titleOwnershipReleased = true
 	menuOwnsControls = false
 	ContextActionService:UnbindAction("ByteforceMainMenuInput")
 	RunService:UnbindFromRenderStep(cameraBindName)
 	restoreCharacterVisibility()
-	if sceneFolder and sceneFolder.Parent then sceneFolder:Destroy() end
-	if bloom and bloom.Parent then bloom:Destroy() end
-	if colorGrade and colorGrade.Parent then colorGrade:Destroy() end
-	if menuControls then
-		pcall(function() menuControls:Enable() end)
-	end
+	-- Do not re-enable PlayerModule controls here. The squad lobby immediately takes
+	-- ownership of the same presentation character and keeps movement locked.
+end
 
-	for property, value in pairs(savedLighting) do
-		Lighting[property] = value
+local function teardownFrontendScene()
+	if not frontendSceneTornDown then
+		frontendSceneTornDown = true
+		if sceneFolder and sceneFolder.Parent then sceneFolder:Destroy() end
+		if bloom and bloom.Parent then bloom:Destroy() end
+		if colorGrade and colorGrade.Parent then colorGrade:Destroy() end
+
+		for property, value in pairs(savedLighting) do
+			Lighting[property] = value
+		end
 	end
 
 	pcall(function()
 		StarterGui:SetCore("TopbarEnabled", true)
 	end)
+end
+
+local function turnCameraToLobby()
+	releaseTitleOwnershipForLobby()
+	camera.CameraType = Enum.CameraType.Scriptable
+
+	local startCF = camera.CFrame
+	local targetCF = CFrame.lookAt(LOBBY_CAMERA_POSITION, LOBBY_CAMERA_FOCUS)
+	local startFov = camera.FieldOfView
+	local duration = 1.02
+	local started = os.clock()
+
+	while true do
+		local elapsed = os.clock() - started
+		local raw = math.clamp(elapsed / duration, 0, 1)
+		local alpha = TweenService:GetValue(raw, Enum.EasingStyle.Quart, Enum.EasingDirection.InOut)
+		local arc = math.sin(alpha * math.pi)
+		local frame = startCF:Lerp(targetCF, alpha)
+		camera.CFrame = frame + Vector3.new(arc * 1.35, arc * 0.55, 0)
+		camera.FieldOfView = startFov + (50 - startFov) * alpha
+		if raw >= 1 then break end
+		RunService.RenderStepped:Wait()
+	end
+
+	camera.CFrame = targetCF
+	camera.FieldOfView = 50
 end
 
 local function enterLobby()
@@ -912,28 +1246,29 @@ local function enterLobby()
 		data.Button.Active = false
 	end
 
-	tween(description, 0.16, {TextTransparency = 1})
-	tween(logoGroup, 0.22, {Position = UDim2.fromScale(0.5, 0.035)})
-	tween(title, 0.18, {TextTransparency = 0.45})
-	tween(subtitle, 0.18, {TextTransparency = 0.6})
+	-- The title UI peels away while the camera turns around inside the same 3D set.
+	-- There is intentionally no black transition here: PLAY should feel like moving
+	-- to another side of the deployment bay, not loading a second menu.
+	transition.BackgroundTransparency = 1
+	tween(description, 0.18, {TextTransparency = 1})
+	tween(nav, 0.42, {Position = UDim2.fromScale(-0.32, 0.525)}, Enum.EasingStyle.Quart)
+	tween(profile, 0.34, {Position = UDim2.new(1, 28, 0, 22)}, Enum.EasingStyle.Quart)
+	tween(logoGroup, 0.34, {Position = UDim2.fromScale(0.5, 0.018)})
+	tween(title, 0.2, {TextTransparency = 1})
+	tween(subtitle, 0.2, {TextTransparency = 1})
+	tween(logoLine, 0.2, {BackgroundTransparency = 1})
+	tween(buildLabel, 0.18, {TextTransparency = 1})
+	tween(inputHint, 0.18, {TextTransparency = 1})
 
-	local fade = tween(transition, 0.38, {BackgroundTransparency = 0})
-	fade.Completed:Wait()
-
-	restoreWorldPresentation()
-	-- Lobby presentation takes ownership immediately after the menu. Keep the
-	-- camera scriptable and keep PlayerModule controls disabled so there is no
-	-- one-frame gap where the avatar can move between front-end states.
+	-- Characters have been standing in four lobby slots behind the title camera the
+	-- whole time. Reveal them before the turn so they naturally enter frame.
 	if menuControls then
 		pcall(function() menuControls:Disable() end)
 	end
-	camera.CameraType = Enum.CameraType.Scriptable
+	turnCameraToLobby()
 
 	player:SetAttribute("MainMenuDismissed", true)
 	RunService.RenderStepped:Wait()
-
-	local reveal = tween(transition, 0.44, {BackgroundTransparency = 1})
-	reveal.Completed:Wait()
 	screenGui.Enabled = false
 end
 
@@ -995,36 +1330,118 @@ local function handleMenuInput(_, inputState, inputObject)
 	return Enum.ContextActionResult.Pass
 end
 
-ContextActionService:BindActionAtPriority(
-	"ByteforceMainMenuInput",
-	handleMenuInput,
-	false,
-	10000,
-	Enum.KeyCode.Escape,
-	Enum.KeyCode.ButtonB,
-	Enum.KeyCode.Up,
-	Enum.KeyCode.W,
-	Enum.KeyCode.DPadUp,
-	Enum.KeyCode.Down,
-	Enum.KeyCode.S,
-	Enum.KeyCode.DPadDown,
-	Enum.KeyCode.Return,
-	Enum.KeyCode.Space,
-	Enum.KeyCode.ButtonA
-)
+local function bindMenuInput()
+	ContextActionService:UnbindAction("ByteforceMainMenuInput")
+	ContextActionService:BindActionAtPriority(
+		"ByteforceMainMenuInput",
+		handleMenuInput,
+		false,
+		10000,
+		Enum.KeyCode.Escape,
+		Enum.KeyCode.ButtonB,
+		Enum.KeyCode.Up,
+		Enum.KeyCode.W,
+		Enum.KeyCode.DPadUp,
+		Enum.KeyCode.Down,
+		Enum.KeyCode.S,
+		Enum.KeyCode.DPadDown,
+		Enum.KeyCode.Return,
+		Enum.KeyCode.Space,
+		Enum.KeyCode.ButtonA
+	)
+end
+
+bindMenuInput()
+
+local function returnToTitle()
+	if frontendSceneTornDown or not titleOwnershipReleased or gameStartedVal.Value then return end
+	transitioning = true
+	activeSectionKey = nil
+	sectionTweenGeneration += 1
+	cancelSectionTweens()
+	sectionPanel.Visible = false
+
+	screenGui.Enabled = true
+	transition.BackgroundTransparency = 1
+	camera.CameraType = Enum.CameraType.Scriptable
+	RunService:UnbindFromRenderStep(cameraBindName)
+	ContextActionService:UnbindAction("ByteforceMainMenuInput")
+
+	local startCF = camera.CFrame
+	local startFov = camera.FieldOfView
+	local targetCF = menuCameraFrame()
+	local duration = 1.0
+	local started = os.clock()
+
+	tween(nav, .54, {Position = UDim2.fromScale(.052, .525)}, Enum.EasingStyle.Quart)
+	tween(profile, .46, {Position = UDim2.new(1, -248, 0, 22)}, Enum.EasingStyle.Quart)
+	tween(logoGroup, .46, {Position = UDim2.fromScale(.5, .055)}, Enum.EasingStyle.Quart)
+	tween(title, .34, {TextTransparency = 0})
+	tween(subtitle, .38, {TextTransparency = 0})
+	tween(logoLine, .4, {BackgroundTransparency = .26})
+	tween(description, .38, {TextTransparency = 0})
+	tween(buildLabel, .34, {TextTransparency = 0})
+	tween(inputHint, .34, {TextTransparency = 0})
+
+	while true do
+		local elapsed = os.clock() - started
+		local raw = math.clamp(elapsed / duration, 0, 1)
+		local alpha = TweenService:GetValue(raw, Enum.EasingStyle.Quart, Enum.EasingDirection.InOut)
+		local arc = math.sin(alpha * math.pi)
+		local frame = startCF:Lerp(targetCF, alpha)
+		camera.CFrame = frame + Vector3.new(-arc * 1.35, arc * .55, 0)
+		camera.FieldOfView = startFov + (61 - startFov) * alpha
+		if raw >= 1 then break end
+		RunService.RenderStepped:Wait()
+	end
+
+	menuOwnsControls = true
+	titleOwnershipReleased = false
+	startWatchingCharacters()
+	if menuControls then
+		pcall(function() menuControls:Disable() end)
+	end
+
+	for _, data in ipairs(buttons) do
+		data.Button.Active = true
+	end
+	transitioning = false
+	setSelected(selectedIndex)
+	bindMenuInput()
+	bindMenuCamera()
+	pcall(function() StarterGui:SetCore("TopbarEnabled", false) end)
+end
+
+player:GetAttributeChangedSignal("MainMenuDismissed"):Connect(function()
+	if player:GetAttribute("MainMenuDismissed") == false and titleOwnershipReleased then
+		task.spawn(returnToTitle)
+	end
+end)
 
 if gameStartedVal then
 	gameStartedVal.Changed:Connect(function(started)
-		if started and screenGui.Enabled and not transitioning then
+		if not started then return end
+		if screenGui.Enabled and not titleOwnershipReleased then
 			player:SetAttribute("MainMenuDismissed", true)
-			restoreWorldPresentation()
-			local character = player.Character
-			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-			camera.CameraType = Enum.CameraType.Custom
-			if humanoid then camera.CameraSubject = humanoid end
-			camera.FieldOfView = 70
-			screenGui.Enabled = false
+			releaseTitleOwnershipForLobby()
 		end
+		-- The shared frontend grade/diorama survives lobby and survivor select, then is
+		-- cleaned up only when the actual run begins. Camera/control restoration is
+		-- deliberately left to the active lobby/showcase controller.
+		teardownFrontendScene()
+		screenGui.Enabled = false
+	end)
+end
+
+if lobbyPhaseVal then
+	lobbyPhaseVal.Changed:Connect(function(phase)
+		if phase ~= "DEPLOYING" then return end
+		-- The live terrain needs its gameplay lighting before the drop camera fades in,
+		-- but Roblox's top bar should remain hidden until the actual RUN begins.
+		teardownFrontendScene()
+		pcall(function()
+			StarterGui:SetCore("TopbarEnabled", false)
+		end)
 	end)
 end
 

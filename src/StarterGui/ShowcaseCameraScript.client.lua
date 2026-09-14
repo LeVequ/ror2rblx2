@@ -234,6 +234,7 @@ local controls
 local presentationFillAttachment
 local deploymentActive = false
 local deploymentPrimed = false
+local deploymentBlackoutReady = false
 local deploymentPod = nil
 local deploymentGroundPosition = nil
 local deploymentGroundForward = nil
@@ -245,6 +246,55 @@ local deploymentDuration = 1
 local impactImpulse = 0
 local impactStarted = nil
 local hatchReframeStarted = nil
+
+local hiddenPresentationState = {}
+
+local function hidePresentationFolder(folderName)
+	local folder = workspace:FindFirstChild(folderName)
+	if not folder then return end
+
+	for _, descendant in ipairs(folder:GetDescendants()) do
+		if hiddenPresentationState[descendant] == nil then
+			if descendant:IsA("BasePart") then
+				hiddenPresentationState[descendant] = {
+					Kind = "BasePart",
+					LocalTransparencyModifier = descendant.LocalTransparencyModifier,
+				}
+				descendant.LocalTransparencyModifier = 1
+			elseif descendant:IsA("Light") then
+				hiddenPresentationState[descendant] = {
+					Kind = "Light",
+					Enabled = descendant.Enabled,
+				}
+				descendant.Enabled = false
+			elseif descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam") then
+				hiddenPresentationState[descendant] = {
+					Kind = "Effect",
+					Enabled = descendant.Enabled,
+				}
+				descendant.Enabled = false
+			end
+		end
+	end
+end
+
+local function hideFrontendPresentation()
+	hidePresentationFolder("ByteforceFrontendLobby")
+	hidePresentationFolder("ByteforceShowcaseScene")
+end
+
+local function restoreFrontendPresentation()
+	for descendant, state in pairs(hiddenPresentationState) do
+		if descendant and descendant.Parent then
+			if state.Kind == "BasePart" then
+				descendant.LocalTransparencyModifier = state.LocalTransparencyModifier
+			elseif state.Kind == "Light" or state.Kind == "Effect" then
+				descendant.Enabled = state.Enabled
+			end
+		end
+		hiddenPresentationState[descendant] = nil
+	end
+end
 
 local function destroyPresentationFill()
 	if presentationFillAttachment and presentationFillAttachment.Parent then
@@ -442,6 +492,9 @@ end
 
 local function showShowcase()
 	if lobbyPhaseVal.Value ~= "SURVIVOR_SELECT" then return end
+	restoreFrontendPresentation()
+	deploymentBlackoutReady=false
+	player:SetAttribute("DeploymentBlackoutReady", false)
 	generation+=1; local mine=generation; deployVisual(false); refreshLoadout(); flow.BackgroundTransparency=1
 	local cover=tweenFlow(0,.18); cover.Completed:Wait(); if mine~=generation then return end
 	local char=player.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart"); if not hrp then flow.BackgroundTransparency=1; return end
@@ -461,8 +514,8 @@ local function showShowcase()
 	phaseRule.BackgroundTransparency=1
 	title.TextTransparency=1
 	role.TextTransparency=1
-		classRail.Position=UDim2.fromScale(.025,.145)
-		panel.Position=UDim2.fromScale(.025,.342)
+	classRail.Position=UDim2.fromScale(.025,.145)
+	panel.Position=UDim2.fromScale(.025,.342)
 	panel.BackgroundTransparency=1
 	navHint.TextTransparency=1
 	squad.TextTransparency=1
@@ -484,10 +537,10 @@ local function showShowcase()
 	tweenFlow(1,.30)
 	tw(phase,.22,{TextTransparency=0})
 	tw(phaseRule,.28,{BackgroundTransparency=.35})
-		tw(classRail,.28,{Position=UDim2.fromScale(.045,.145)})
+	tw(classRail,.28,{Position=UDim2.fromScale(.045,.145)})
 	tw(title,.25,{TextTransparency=0})
 	tw(role,.3,{TextTransparency=0})
-		tw(panel,.3,{Position=UDim2.fromScale(.045,.342),BackgroundTransparency=.18})
+	tw(panel,.3,{Position=UDim2.fromScale(.045,.342),BackgroundTransparency=.18})
 	tw(navHint,.34,{TextTransparency=0})
 	tw(squad,.3,{TextTransparency=0})
 	tw(deploy,.3,{Position=UDim2.new(1,-328,1,-98),BackgroundTransparency=0})
@@ -599,23 +652,37 @@ local function deploymentCameraFrame(pod, serverNow)
 end
 
 local function primeDeploymentTransition()
-	if deploymentPrimed or deploymentActive then return end
+	if deploymentActive then return end
+	if deploymentPrimed then
+		while deploymentPrimed and not deploymentBlackoutReady and lobbyPhaseVal.Value=="DEPLOYING" do
+			RunService.RenderStepped:Wait()
+		end
+		return
+	end
 	deploymentPrimed=true
+	deploymentBlackoutReady=false
+	player:SetAttribute("DeploymentBlackoutReady", false)
 
 	-- This runs as soon as DEPLOYING begins (and is also triggered by PREPARE).
-	-- Stop the showcase camera before the server moves the character into the pod.
-	-- The screen can finish fading to black while the camera is frozen here; it must
-	-- never continue following the character hundreds of studs into the sky.
+	-- The black overlay is the authority for this handoff. Nothing from the survivor
+	-- select scene is dismantled until the screen is completely opaque; otherwise
+	-- lighting/sky changes can leak through the tail end of the fade.
+	local cover=tweenFlow(0,.12)
+	cover.Completed:Wait()
+	flow.BackgroundTransparency=0
+
 	generation+=1
-	tweenFlow(0,.12)
 	active=false
 	rootGui.Visible=false
 	unbindInput()
 	stopCamera()
 	destroyPresentationFill()
 	setShowcaseGrade(false)
+	hideFrontendPresentation()
 	setControls(false)
 	camera.CameraType=Enum.CameraType.Scriptable
+	deploymentBlackoutReady=true
+	player:SetAttribute("DeploymentBlackoutReady", true)
 end
 
 local function beginDeployment(startTime,duration)
@@ -631,8 +698,8 @@ local function beginDeployment(startTime,duration)
 	-- idempotent fallback here for late joins or unusual replication ordering, then
 	-- wait for full black before snapping to the ground shot.
 	primeDeploymentTransition()
-	local cover=tweenFlow(0,.08)
-	cover.Completed:Wait()
+	if not deploymentBlackoutReady then return end
+	flow.BackgroundTransparency=0
 	if mine~=deploymentGeneration then return end
 
 	local pod=findLocalDeploymentPod(3)
@@ -682,6 +749,8 @@ local function finishDeployment()
 	deploymentGeneration+=1
 	deploymentActive=false
 	deploymentPrimed=false
+	deploymentBlackoutReady=false
+	player:SetAttribute("DeploymentBlackoutReady", false)
 	deploymentGroundPosition=nil
 	deploymentGroundForward=nil
 	deploymentGroundRight=nil
@@ -765,27 +834,35 @@ if deploymentRemote then deploymentRemote.OnClientEvent:Connect(function(action,
 	end
 end) end
 	if lobbyPhaseVal then lobbyPhaseVal.Changed:Connect(function(phase)
-				if phase=="SURVIVOR_SELECT" and not active then
-					deploymentPrimed=false
-					deploymentGroundPosition=nil
-					deploymentGroundForward=nil
-					deploymentGroundRight=nil
-					deploymentLandingPosition=nil
-					task.spawn(showShowcase)
-				elseif phase=="DEPLOYING" then
-					-- Claim the camera immediately. Waiting until BEGIN allowed the showcase
-					-- camera to follow the teleported character into the high-altitude pod.
-					primeDeploymentTransition()
-			elseif phase~="SURVIVOR_SELECT" and active and phase~="RUN" then
-				generation+=1
-				active=false
+		if phase=="SURVIVOR_SELECT" and not active then
+			restoreFrontendPresentation()
+			deploymentPrimed=false
+			deploymentBlackoutReady=false
+			player:SetAttribute("DeploymentBlackoutReady", false)
+			deploymentGroundPosition=nil
+			deploymentGroundForward=nil
+			deploymentGroundRight=nil
+			deploymentLandingPosition=nil
+			task.spawn(showShowcase)
+		elseif phase=="DEPLOYING" then
+			-- Claim the camera immediately. Waiting until BEGIN allowed the showcase
+			-- camera to follow the teleported character into the high-altitude pod.
+			primeDeploymentTransition()
+		elseif phase=="LOBBY" then
+			restoreFrontendPresentation()
+			deploymentPrimed=false
+			deploymentBlackoutReady=false
+			player:SetAttribute("DeploymentBlackoutReady", false)
+		elseif phase~="SURVIVOR_SELECT" and active and phase~="RUN" then
+			generation+=1
+			active=false
 			rootGui.Visible=false
 			unbindInput()
 			stopCamera()
 			destroyPresentationFill()
 			setShowcaseGrade(false)
 		end
-end) end
+	end) end
 if gameStartedVal then gameStartedVal.Changed:Connect(function(started)
 		if started then
 			if not deploymentActive then task.spawn(enterRun) end
@@ -809,6 +886,8 @@ script.Destroying:Connect(function()
 	deploymentGeneration+=1
 	active=false
 	deploymentActive=false
+	deploymentBlackoutReady=false
+	player:SetAttribute("DeploymentBlackoutReady", false)
 	deploymentGroundPosition=nil
 	deploymentGroundForward=nil
 	deploymentGroundRight=nil
@@ -816,6 +895,7 @@ script.Destroying:Connect(function()
 	unbindInput()
 	stopCamera()
 	stopDeploymentCamera()
+	restoreFrontendPresentation()
 	destroyPresentationFill()
 	setShowcaseGrade(false)
 	if selectGrade and selectGrade.Parent then selectGrade:Destroy() end

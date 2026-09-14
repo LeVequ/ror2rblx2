@@ -21,6 +21,14 @@ if player:GetAttribute("MainMenuDismissed") == nil then
 	player:SetAttribute("MainMenuDismissed", false)
 end
 
+if player:GetAttribute("SquadHudVisible") == nil then
+	player:SetAttribute("SquadHudVisible", false)
+end
+
+if player:GetAttribute("DeploymentBlackoutReady") == nil then
+	player:SetAttribute("DeploymentBlackoutReady", false)
+end
+
 if player:GetAttribute("MainMenuDismissed") == true or (gameStartedVal and gameStartedVal.Value) then
 	screenGui.Enabled = false
 	return
@@ -1250,6 +1258,10 @@ local function enterLobby()
 	-- There is intentionally no black transition here: PLAY should feel like moving
 	-- to another side of the deployment bay, not loading a second menu.
 	transition.BackgroundTransparency = 1
+	-- Start revealing the squad composition immediately. LobbyUI only reveals and
+	-- tracks its HUD here; the title screen still owns the camera/input until the
+	-- turn is complete and MainMenuDismissed becomes true.
+	player:SetAttribute("SquadHudVisible", true)
 	tween(description, 0.18, {TextTransparency = 1})
 	tween(nav, 0.42, {Position = UDim2.fromScale(-0.32, 0.525)}, Enum.EasingStyle.Quart)
 	tween(profile, 0.34, {Position = UDim2.new(1, 28, 0, 22)}, Enum.EasingStyle.Quart)
@@ -1356,6 +1368,7 @@ bindMenuInput()
 local function returnToTitle()
 	if frontendSceneTornDown or not titleOwnershipReleased or gameStartedVal.Value then return end
 	transitioning = true
+	player:SetAttribute("SquadHudVisible", false)
 	activeSectionKey = nil
 	sectionTweenGeneration += 1
 	cancelSectionTweens()
@@ -1436,11 +1449,19 @@ end
 if lobbyPhaseVal then
 	lobbyPhaseVal.Changed:Connect(function(phase)
 		if phase ~= "DEPLOYING" then return end
-		-- The live terrain needs its gameplay lighting before the drop camera fades in,
-		-- but Roblox's top bar should remain hidden until the actual RUN begins.
-		teardownFrontendScene()
-		pcall(function()
-			StarterGui:SetCore("TopbarEnabled", false)
+		-- Survivor-select owns the blackout. Do not remove the shared frontend grade or
+		-- diorama until that script reports that the screen is fully opaque; otherwise
+		-- the restored sky/gameplay lighting is visible during the last frames of fade.
+		task.spawn(function()
+			while lobbyPhaseVal.Value == "DEPLOYING"
+				and player:GetAttribute("DeploymentBlackoutReady") ~= true do
+				RunService.RenderStepped:Wait()
+			end
+			if lobbyPhaseVal.Value ~= "DEPLOYING" then return end
+			teardownFrontendScene()
+			pcall(function()
+				StarterGui:SetCore("TopbarEnabled", false)
+			end)
 		end)
 	end)
 end

@@ -56,10 +56,11 @@ local function stroke(parent, color, transparency)
 	})
 end
 
-local root = make("Frame", "LobbyRoot", screenGui, {
+local root = make("CanvasGroup", "LobbyRoot", screenGui, {
 	Size = UDim2.fromScale(1, 1),
 	BackgroundTransparency = 1,
 	Visible = false,
+	GroupTransparency = 1,
 	ZIndex = 2,
 })
 
@@ -259,7 +260,7 @@ local disbandHint = make("TextLabel", "DisbandHint", root, {
 	Position = UDim2.new(0, 24, 1, -18),
 	AnchorPoint = Vector2.new(0, 1),
 	BackgroundTransparency = 1,
-	Text = "ESC / B   RETURN TO TITLE",
+	Text = "ESC   RETURN TO TITLE",
 	TextColor3 = C.Muted,
 	TextSize = 8,
 	Font = Enum.Font.GothamMedium,
@@ -327,7 +328,10 @@ local closeTutorial = make("TextButton", "CloseTutorial", tutorial, {
 
 local controls
 local lobbyActive = false
+local hudRevealed = false
+local hudRevealTween = nil
 local cameraBind = "ByteforceLobbyCamera"
+local hudTrackingBind = "ByteforceLobbyHudTracking"
 local inputBind = "ByteforceLobbyInput"
 local cameraGeneration = 0
 local playerConnections = {}
@@ -355,6 +359,10 @@ local function stopLobbyCamera()
 	RunService:UnbindFromRenderStep(cameraBind)
 end
 
+local function stopHudTracking()
+	RunService:UnbindFromRenderStep(hudTrackingBind)
+end
+
 local function lobbyTarget(driftX, driftY)
 	local position = LOBBY_CAMERA_POSITION + Vector3.new(driftX or 0, driftY or 0, 0)
 	return CFrame.lookAt(position, LOBBY_CAMERA_FOCUS)
@@ -368,7 +376,7 @@ local function updateSlotCardPositions()
 	local viewport = camera.ViewportSize
 	for slot, data in ipairs(slotCards) do
 		local screenPoint, onScreen = camera:WorldToViewportPoint(slotWorldPosition(slot))
-		data.Frame.Visible = lobbyActive and onScreen and screenPoint.Z > 0
+		data.Frame.Visible = hudRevealed and onScreen and screenPoint.Z > 0
 		if data.Frame.Visible then
 			local x = math.clamp(screenPoint.X, 92, math.max(92, viewport.X - 92))
 			local y = math.clamp(screenPoint.Y + 18, 150, math.max(150, viewport.Y - 150))
@@ -426,7 +434,8 @@ end
 
 local function refreshDisbandVisibility()
 	local isHost = player:GetAttribute("LobbySlot") == 1
-	disbandBtn.Visible = isHost and lobbyActive and lobbyPhaseVal.Value == "LOBBY"
+	disbandBtn.Visible = isHost and hudRevealed and lobbyPhaseVal.Value == "LOBBY"
+	disbandBtn.Active = disbandBtn.Visible and lobbyActive
 	disbandHint.Visible = disbandBtn.Visible
 end
 
@@ -486,23 +495,70 @@ end
 
 local function stopLobbyPresentation()
 	lobbyActive = false
+	hudRevealed = false
+	readyBtn.Active = false
+	helpBtn.Active = false
 	cameraGeneration += 1
 	stopLobbyCamera()
+	stopHudTracking()
 	ContextActionService:UnbindAction(inputBind)
+	if hudRevealTween then
+		hudRevealTween:Cancel()
+		hudRevealTween = nil
+	end
 	pcall(function()
 		if GuiService.SelectedObject == readyBtn then GuiService.SelectedObject = nil end
 	end)
+	root.GroupTransparency = 1
+	root.Position = UDim2.fromOffset(0, 10)
 	root.Visible = false
 	tutorial.Visible = false
 	disbandBtn.Visible = false
 	disbandHint.Visible = false
 end
 
+local function revealLobbyHud()
+	if lobbyPhaseVal.Value ~= "LOBBY" or gameStartedVal.Value then return end
+	root.Visible = true
+	readyBtn.Active = false
+	helpBtn.Active = false
+	refreshRoster()
+	if hudRevealed then return end
+
+	hudRevealed = true
+	-- During the main-menu camera turn the lobby does not own the camera yet, but the
+	-- player cards still need to follow that moving camera. This render step is
+	-- presentation-only: it never writes camera CFrame/FOV.
+	stopHudTracking()
+	RunService:BindToRenderStep(hudTrackingBind, Enum.RenderPriority.Camera.Value + 2, function()
+		if not hudRevealed or lobbyActive then return end
+		updateSlotCardPositions()
+	end)
+	if hudRevealTween then hudRevealTween:Cancel() end
+	root.GroupTransparency = 1
+	root.Position = UDim2.fromOffset(0, 10)
+	hudRevealTween = TweenService:Create(
+		root,
+		TweenInfo.new(.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+		{
+			GroupTransparency = 0,
+			Position = UDim2.fromOffset(0, 0),
+		}
+	)
+	hudRevealTween:Play()
+	hudRevealTween.Completed:Once(function()
+		hudRevealTween = nil
+	end)
+	refreshDisbandVisibility()
+end
+
 local function showLobby()
 	if player:GetAttribute("MainMenuDismissed") ~= true then return end
 	if lobbyPhaseVal.Value ~= "LOBBY" or gameStartedVal.Value then return end
-	root.Visible = true
-	refreshRoster()
+	revealLobbyHud()
+	stopHudTracking()
+	readyBtn.Active = true
+	helpBtn.Active = true
 
 	ContextActionService:BindActionAtPriority(inputBind, function(_, state, input)
 		if not lobbyActive then return Enum.ContextActionResult.Pass end
@@ -526,9 +582,9 @@ local function showLobby()
 		if UserInputService.GamepadEnabled then
 			pcall(function() GuiService.SelectedObject = readyBtn end)
 		end
-			startLobbyCamera()
-			refreshDisbandVisibility()
-	end
+				startLobbyCamera()
+				refreshDisbandVisibility()
+			end
 
 readyBtn.Activated:Connect(function()
 	if lobbyPhaseVal.Value == "LOBBY" and toggleReadyRemote then
@@ -547,7 +603,7 @@ disbandBtn.MouseLeave:Connect(function()
 end)
 
 disbandBtn.Activated:Connect(function()
-	if disbandBtn.Visible and lobbyPhaseVal.Value == "LOBBY" and disbandLobbyRemote then
+	if lobbyActive and disbandBtn.Visible and lobbyPhaseVal.Value == "LOBBY" and disbandLobbyRemote then
 		disbandLobbyRemote:FireServer()
 	end
 end)
@@ -564,10 +620,20 @@ end)
 if disbandLobbyRemote then
 	disbandLobbyRemote.OnClientEvent:Connect(function()
 		if gameStartedVal.Value or lobbyPhaseVal.Value ~= "LOBBY" then return end
+		player:SetAttribute("SquadHudVisible", false)
 		stopLobbyPresentation()
 		player:SetAttribute("MainMenuDismissed", false)
 	end)
 end
+
+player:GetAttributeChangedSignal("SquadHudVisible"):Connect(function()
+	if player:GetAttribute("SquadHudVisible") == true then
+		-- Mid-turn pre-reveal only. MainMenu still owns the camera and input here.
+		revealLobbyHud()
+	elseif player:GetAttribute("MainMenuDismissed") ~= true then
+		stopLobbyPresentation()
+	end
+end)
 
 player:GetAttributeChangedSignal("MainMenuDismissed"):Connect(function()
 	if player:GetAttribute("MainMenuDismissed") == true then
@@ -604,6 +670,8 @@ end)
 
 if player:GetAttribute("MainMenuDismissed") == true and lobbyPhaseVal.Value == "LOBBY" then
 	showLobby()
+elseif player:GetAttribute("SquadHudVisible") == true and lobbyPhaseVal.Value == "LOBBY" then
+	revealLobbyHud()
 end
 
 script.Destroying:Connect(function()

@@ -11,7 +11,17 @@
       "$className": "Lighting",
       "$ignoreUnknownInstances": true,
       "Sky": {
-        "$className": "Sky"
+        "$className": "Sky",
+        "$properties": {
+          "SkyboxBk": "rbxassetid://159454299",
+          "SkyboxDn": "rbxassetid://159454296",
+          "SkyboxFt": "rbxassetid://159454293",
+          "SkyboxLf": "rbxassetid://159454286",
+          "SkyboxRt": "rbxassetid://159454300",
+          "SkyboxUp": "rbxassetid://159454288",
+          "StarCount": 0,
+          "CelestialBodiesShown": false
+        }
       }
     },
     "ServerScriptService": {

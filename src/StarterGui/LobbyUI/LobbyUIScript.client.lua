@@ -335,6 +335,9 @@ local hudTrackingBind = "ByteforceLobbyHudTracking"
 local inputBind = "ByteforceLobbyInput"
 local cameraGeneration = 0
 local playerConnections = {}
+local returningFromRun = false
+local returnSettleToken = nil
+local returnSettleFrames = 0
 
 local function getControls()
 	if controls then return controls end
@@ -385,34 +388,100 @@ local function updateSlotCardPositions()
 	end
 end
 
-local function startLobbyCamera()
+local function startLobbyCamera(snapImmediately, returnReadyToken)
 	cameraGeneration += 1
 	local mine = cameraGeneration
 	stopLobbyCamera()
 	lobbyActive = true
-	setControlsEnabled(false)
 	camera.CameraType = Enum.CameraType.Scriptable
 
 	local startCF = camera.CFrame
 	local targetCF = lobbyTarget(0, 0)
 	local startFov = camera.FieldOfView
 	local started = os.clock()
+	local returnCameraFrames = 0
+	if snapImmediately then
+		camera.CFrame = targetCF
+		camera.FieldOfView = 50
+		startCF = targetCF
+		startFov = 50
+		-- Skip the initial camera blend while the return blackout is still covering it.
+		started -= .24
+	end
 
 	RunService:BindToRenderStep(cameraBind, Enum.RenderPriority.Camera.Value + 1, function()
 		if not lobbyActive or mine ~= cameraGeneration then return end
-		local elapsed = os.clock() - started
-		if elapsed < .24 then
-			local alpha = TweenService:GetValue(math.clamp(elapsed / .24, 0, 1), Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-			camera.CFrame = startCF:Lerp(targetCF, alpha)
-			camera.FieldOfView = startFov + (50 - startFov) * alpha
-		else
-			local driftX = math.sin(elapsed * .22) * .28
-			local driftY = math.sin(elapsed * .16) * .07
-			camera.CFrame = lobbyTarget(driftX, driftY)
-			camera.FieldOfView = 50
-		end
+		-- Reassert Scriptable ownership every rendered frame. Character respawn/default
+		-- camera setup can run during a return, so a one-time assignment is not enough
+		-- to prove the staging camera has actually won before the blackout is removed.
+			camera.CameraType = Enum.CameraType.Scriptable
+			local elapsed = os.clock() - started
+			local appliedCF
+			if elapsed < .24 then
+				local alpha = TweenService:GetValue(math.clamp(elapsed / .24, 0, 1), Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+				appliedCF = startCF:Lerp(targetCF, alpha)
+				camera.CFrame = appliedCF
+				camera.FieldOfView = startFov + (50 - startFov) * alpha
+			else
+				local driftX = math.sin(elapsed * .22) * .28
+				local driftY = math.sin(elapsed * .16) * .07
+				appliedCF = lobbyTarget(driftX, driftY)
+				camera.CFrame = appliedCF
+				camera.FieldOfView = 50
+			end
 		updateSlotCardPositions()
-	end)
+
+		if returnReadyToken
+			and player:GetAttribute("LobbyReturnToken") == returnReadyToken
+			and player:GetAttribute("LobbyReturnCameraPrelock") == returnReadyToken then
+			returnCameraFrames += 1
+			-- Return camera readiness is intentionally allowed before RETURNING/LOBBY.
+			-- The staging camera must win while the old run is still hidden under black,
+			-- so character respawn/default-camera setup can never become visible later.
+			if returnCameraFrames >= 3
+				and player:GetAttribute("LobbyReturnCameraReady") ~= returnReadyToken then
+					player:SetAttribute("LobbyReturnCameraReady", returnReadyToken)
+				end
+			end
+
+			local settleToken = player:GetAttribute("LobbyReturnToken")
+			if lobbyPhaseVal.Value == "LOBBY"
+				and typeof(settleToken) == "number"
+				and player:GetAttribute("LobbyReturnCameraPrelock") == settleToken
+				and player:GetAttribute("LobbyReturnCameraReady") == settleToken
+				and appliedCF then
+				-- Self-arm on the first rendered LOBBY frame. This avoids relying on event
+				-- ordering between the replicated phase change and the local UI handoff.
+				if returnSettleToken ~= settleToken then
+					returnSettleToken = settleToken
+					returnSettleFrames = 0
+				end
+				local positionError = (camera.CFrame.Position - appliedCF.Position).Magnitude
+				local lookAgreement = camera.CFrame.LookVector:Dot(appliedCF.LookVector)
+				local fovError = math.abs(camera.FieldOfView - 50)
+				if camera.CameraType == Enum.CameraType.Scriptable
+					and positionError <= 0.05
+					and lookAgreement >= 0.9999
+					and fovError <= 0.05 then
+					returnSettleFrames += 1
+				else
+					returnSettleFrames = 0
+				end
+
+				-- This is intentionally a fresh post-respawn proof. The prelock token may
+				-- already be satisfied before LoadCharacter runs, so only consecutive frames
+				-- from this live lobby render bind are allowed to release the blackout.
+				if returnSettleFrames >= 3
+					and player:GetAttribute("LobbyReturnCameraSettled") ~= settleToken then
+					player:SetAttribute("LobbyReturnCameraSettled", settleToken)
+				end
+			end
+		end)
+
+	-- Control resolution can yield while PlayerModule initializes. Camera ownership
+	-- must never wait on that during a return, so disable movement off the critical
+	-- render path after the bind is already live.
+	task.spawn(setControlsEnabled, false)
 end
 
 local function refreshReady()
@@ -496,6 +565,8 @@ end
 local function stopLobbyPresentation()
 	lobbyActive = false
 	hudRevealed = false
+	returnSettleToken = nil
+	returnSettleFrames = 0
 	readyBtn.Active = false
 	helpBtn.Active = false
 	cameraGeneration += 1
@@ -515,6 +586,33 @@ local function stopLobbyPresentation()
 	tutorial.Visible = false
 	disbandBtn.Visible = false
 	disbandHint.Visible = false
+end
+
+local function hideLobbyHudForReturn()
+	-- Return transitions keep the lobby camera bind alive continuously. Only hide
+	-- staging UI/input here; tearing down the camera would let Roblox's respawn
+	-- camera briefly reclaim the viewport before the fade finishes.
+	hudRevealed = false
+	readyBtn.Active = false
+	helpBtn.Active = false
+	stopHudTracking()
+	ContextActionService:UnbindAction(inputBind)
+	if hudRevealTween then
+		hudRevealTween:Cancel()
+		hudRevealTween = nil
+	end
+	pcall(function()
+		if GuiService.SelectedObject == readyBtn then GuiService.SelectedObject = nil end
+	end)
+	root.GroupTransparency = 1
+	root.Position = UDim2.fromOffset(0, 10)
+	root.Visible = false
+	tutorial.Visible = false
+	disbandBtn.Visible = false
+	disbandHint.Visible = false
+	-- PlayerModule can still be initializing after a respawn. Never let that yield
+	-- delay the camera prelock; movement disabling is independent of camera ownership.
+	task.spawn(setControlsEnabled, false)
 end
 
 local function revealLobbyHud()
@@ -552,39 +650,80 @@ local function revealLobbyHud()
 	refreshDisbandVisibility()
 end
 
-local function showLobby()
-	if player:GetAttribute("MainMenuDismissed") ~= true then return end
-	if lobbyPhaseVal.Value ~= "LOBBY" or gameStartedVal.Value then return end
-	revealLobbyHud()
-	stopHudTracking()
+local function enableLobbyInteraction()
 	readyBtn.Active = true
 	helpBtn.Active = true
-
+	ContextActionService:UnbindAction(inputBind)
 	ContextActionService:BindActionAtPriority(inputBind, function(_, state, input)
 		if not lobbyActive then return Enum.ContextActionResult.Pass end
 		if state ~= Enum.UserInputState.Begin then return Enum.ContextActionResult.Sink end
 		if input.KeyCode == Enum.KeyCode.Return or input.KeyCode == Enum.KeyCode.Space or input.KeyCode == Enum.KeyCode.ButtonA then
 			if toggleReadyRemote then toggleReadyRemote:FireServer() end
 			return Enum.ContextActionResult.Sink
-			elseif input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.ButtonB then
-				if tutorial.Visible then
-					tutorial.Visible = false
-				elseif disbandBtn.Visible and disbandLobbyRemote then
-					disbandLobbyRemote:FireServer()
-				end
-				return Enum.ContextActionResult.Sink
+		elseif input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.ButtonB then
+			if tutorial.Visible then
+				tutorial.Visible = false
+			elseif disbandBtn.Visible and disbandLobbyRemote then
+				disbandLobbyRemote:FireServer()
 			end
-			return Enum.ContextActionResult.Pass
-		end, false, 10000,
-			Enum.KeyCode.Return, Enum.KeyCode.Space, Enum.KeyCode.ButtonA,
-			Enum.KeyCode.Escape, Enum.KeyCode.ButtonB)
-
-		if UserInputService.GamepadEnabled then
-			pcall(function() GuiService.SelectedObject = readyBtn end)
+			return Enum.ContextActionResult.Sink
 		end
-				startLobbyCamera()
-				refreshDisbandVisibility()
-			end
+		return Enum.ContextActionResult.Pass
+	end, false, 10000,
+		Enum.KeyCode.Return, Enum.KeyCode.Space, Enum.KeyCode.ButtonA,
+		Enum.KeyCode.Escape, Enum.KeyCode.ButtonB)
+
+	if UserInputService.GamepadEnabled then
+		pcall(function() GuiService.SelectedObject = readyBtn end)
+	end
+	refreshDisbandVisibility()
+end
+
+local function showLobby(snapCamera)
+	if player:GetAttribute("MainMenuDismissed") ~= true then return end
+	if lobbyPhaseVal.Value ~= "LOBBY" or gameStartedVal.Value then return end
+	revealLobbyHud()
+	stopHudTracking()
+	startLobbyCamera(snapCamera == true)
+	enableLobbyInteraction()
+end
+
+local function prepareReturnedLobby()
+	if player:GetAttribute("MainMenuDismissed") ~= true then return end
+	if lobbyPhaseVal.Value ~= "LOBBY" or gameStartedVal.Value then return end
+
+	-- Build the final staging view under black, but deliberately keep every lobby
+	-- HUD element hidden and non-interactive until the transition controller reveals it.
+	hudRevealed = false
+	root.Visible = false
+	root.GroupTransparency = 1
+	readyBtn.Active = false
+	helpBtn.Active = false
+	ContextActionService:UnbindAction(inputBind)
+	stopHudTracking()
+	refreshRoster()
+
+	local token = player:GetAttribute("LobbyReturnToken")
+	if typeof(token) ~= "number" then return end
+	-- Normal return path already prelocked the camera before the server started the
+	-- respawn. Only start it here as a late-join/fallback path; never restart a bind
+	-- that has been holding the staging view throughout RETURNING.
+	if not lobbyActive then
+		startLobbyCamera(true, token)
+	end
+end
+
+local function revealReturnedLobby(token)
+	if not returningFromRun then return end
+	if typeof(token) ~= "number" or player:GetAttribute("LobbyReturnToken") ~= token then return end
+	if lobbyPhaseVal.Value ~= "LOBBY" or gameStartedVal.Value then return end
+	revealLobbyHud()
+	stopHudTracking()
+	enableLobbyInteraction()
+	returningFromRun = false
+	returnSettleToken = nil
+	returnSettleFrames = 0
+end
 
 readyBtn.Activated:Connect(function()
 	if lobbyPhaseVal.Value == "LOBBY" and toggleReadyRemote then
@@ -643,12 +782,44 @@ player:GetAttributeChangedSignal("MainMenuDismissed"):Connect(function()
 	end
 end)
 
+player:GetAttributeChangedSignal("LobbyReturnCameraPrelock"):Connect(function()
+	local token = player:GetAttribute("LobbyReturnCameraPrelock")
+	if typeof(token) ~= "number" then return end
+	if player:GetAttribute("LobbyReturnToken") ~= token then return end
+
+	returningFromRun = true
+	returnSettleToken = nil
+	returnSettleFrames = 0
+	hideLobbyHudForReturn()
+	startLobbyCamera(true, token)
+end)
+
 lobbyPhaseVal.Changed:Connect(function(phase)
 	if phase == "LOBBY" then
-		showLobby()
+		local token = player:GetAttribute("LobbyReturnToken")
+		local returningByToken = typeof(token) == "number"
+			and player:GetAttribute("LobbyReturnCameraPrelock") == token
+			and player:GetAttribute("LobbyReturnCameraReady") == token
+		if returningFromRun or returningByToken then
+			returningFromRun = true
+			prepareReturnedLobby()
+		else
+			showLobby(false)
+		end
+	elseif phase == "RETURNING" then
+		returningFromRun = true
+		returnSettleToken = nil
+		returnSettleFrames = 0
+		-- The camera was prelocked under the blackout before the server entered this
+		-- phase. Preserve that exact bind through LoadCharacter/teleport/reset.
+		hideLobbyHudForReturn()
 	elseif phase == "SURVIVOR_SELECT" or phase == "RUN" then
 		stopLobbyPresentation()
 	end
+end)
+
+player:GetAttributeChangedSignal("LobbyReturnRevealHud"):Connect(function()
+	revealReturnedLobby(player:GetAttribute("LobbyReturnRevealHud"))
 end)
 
 Players.PlayerAdded:Connect(function(p)

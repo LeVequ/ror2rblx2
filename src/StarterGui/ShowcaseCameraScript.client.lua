@@ -13,6 +13,7 @@ local showcaseRemote = ReplicatedStorage:WaitForChild("PlayShowcaseRemote", 10)
 local confirmDeployRemote = ReplicatedStorage:WaitForChild("ConfirmDeployRemote", 10)
 local selectClassRemote = ReplicatedStorage:WaitForChild("SelectClassRemote", 10)
 local deploymentRemote = ReplicatedStorage:WaitForChild("DeploymentRemote", 10)
+local returnLobbyRemote = ReplicatedStorage:WaitForChild("ReturnLobbyRemote", 10)
 local gameStartedVal = ReplicatedStorage:WaitForChild("GameStarted", 10)
 local lobbyPhaseVal = ReplicatedStorage:WaitForChild("LobbyPhase", 10)
 local screenGui = player:WaitForChild("PlayerGui"):WaitForChild("LobbyUI")
@@ -246,6 +247,9 @@ local deploymentDuration = 1
 local impactImpulse = 0
 local impactStarted = nil
 local hatchReframeStarted = nil
+local returningToLobby = false
+local activeReturnToken = nil
+local returnRevealInProgress = false
 
 local hiddenPresentationState = {}
 
@@ -818,7 +822,124 @@ local function enterRun()
 	restoreCamera(); setControls(true); RunService.RenderStepped:Wait(); tweenFlow(1,.45)
 end
 
+local function prepareReturnToLobby(token)
+	if typeof(token) ~= "number" then return end
+	activeReturnToken = token
+	returningToLobby = true
+	returnRevealInProgress = false
+	player:SetAttribute("LobbyReturnToken", token)
+	player:SetAttribute("LobbyReturnFrontendPrepare", nil)
+	player:SetAttribute("LobbyReturnFrontendReady", nil)
+	player:SetAttribute("LobbyReturnCameraPrelock", nil)
+	player:SetAttribute("LobbyReturnCameraReady", nil)
+	player:SetAttribute("LobbyReturnCameraSettled", nil)
+	player:SetAttribute("LobbyReturnRevealHud", nil)
+
+	-- This is the only owner of the return blackout. Finish the visible fade before
+	-- telling the server it may respawn/teleport/reset anything underneath it.
+	flow.Visible = true
+	local cover = tweenFlow(0, .18)
+	cover.Completed:Wait()
+	if activeReturnToken ~= token then return end
+	flow.BackgroundTransparency = 0
+
+	generation += 1
+	active = false
+	rootGui.Visible = false
+	unbindInput()
+	stopCamera()
+	stopDeploymentCamera()
+	destroyPresentationFill()
+	setShowcaseGrade(false)
+	-- Do not let PlayerModule/control resolution delay frontend restoration or the
+	-- lobby camera handshake. Movement can be disabled independently while black.
+	task.spawn(setControls, false)
+	camera.CameraType = Enum.CameraType.Scriptable
+
+	-- The frontend is built from normal Roblox parts/materials, so there is no
+	-- external mesh/texture payload for ContentProvider to preload here. The real
+	-- readiness issue is presentation state: deployment locally hid the server
+	-- staging folder, while MainMenu detached its client diorama from Workspace.
+	-- Restore both while fully black, then wait for MainMenu to confirm the local
+	-- scene/lighting have rendered before moving the camera there.
+	restoreFrontendPresentation()
+	player:SetAttribute("LobbyReturnFrontendPrepare", token)
+	while activeReturnToken == token
+		and player:GetAttribute("LobbyReturnFrontendReady") ~= token do
+		RunService.RenderStepped:Wait()
+	end
+	if activeReturnToken ~= token then return end
+
+	-- Camera positioning is the next hidden operation after the frontend is ready.
+	-- LobbyUI snaps/binds the final staging shot while the run is still active and
+	-- reports readiness from that render bind itself. Only then may the server
+	-- respawn/teleport the character.
+	player:SetAttribute("LobbyReturnCameraPrelock", token)
+	while activeReturnToken == token
+		and player:GetAttribute("LobbyReturnCameraReady") ~= token do
+		RunService.RenderStepped:Wait()
+	end
+	if activeReturnToken ~= token then return end
+
+	returnLobbyRemote:FireServer("BLACKOUT_READY", token)
+end
+
+local function tryRevealReturnedLobby()
+	if returnRevealInProgress then return end
+	local token = player:GetAttribute("LobbyReturnToken")
+	if typeof(token) ~= "number" then return end
+	if lobbyPhaseVal.Value ~= "LOBBY" then return end
+	if player:GetAttribute("LobbyReturnCameraPrelock") ~= token then return end
+	if player:GetAttribute("LobbyReturnCameraReady") ~= token then return end
+	if player:GetAttribute("LobbyReturnCameraSettled") ~= token then return end
+
+	returnRevealInProgress = true
+	task.spawn(function()
+		if lobbyPhaseVal.Value ~= "LOBBY"
+			or player:GetAttribute("LobbyReturnToken") ~= token
+			or player:GetAttribute("LobbyReturnCameraPrelock") ~= token
+			or player:GetAttribute("LobbyReturnCameraReady") ~= token
+			or player:GetAttribute("LobbyReturnCameraSettled") ~= token then
+			returnRevealInProgress = false
+			return
+		end
+
+		-- Resolve the live overlay after respawn instead of trusting the cached
+		-- reference captured before LoadCharacter. StarterGui/PlayerGui can replace
+		-- GUI instances during the return, which would let a tween complete against
+		-- an orphaned frame while the visible FlowTransition remains black.
+		local liveLobbyGui = player:FindFirstChild("PlayerGui") and player.PlayerGui:FindFirstChild("LobbyUI")
+		local liveFlow = liveLobbyGui and liveLobbyGui:FindFirstChild("FlowTransition")
+		local revealTarget = (liveFlow and liveFlow:IsA("Frame")) and liveFlow or flow
+		local reveal = TweenService:Create(
+			revealTarget,
+			TweenInfo.new(.35, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+			{BackgroundTransparency = 1}
+		)
+		reveal:Play()
+		reveal.Completed:Wait()
+		-- Snap the terminal value as well so a cancelled/interrupted tween cannot
+		-- leave even a single opaque frame after the camera has settled.
+		revealTarget.BackgroundTransparency = 1
+		if lobbyPhaseVal.Value == "LOBBY" and player:GetAttribute("LobbyReturnToken") == token then
+			player:SetAttribute("LobbyReturnRevealHud", token)
+			player:SetAttribute("LobbyReturnFrontendPrepare", nil)
+			player:SetAttribute("LobbyReturnFrontendReady", nil)
+			player:SetAttribute("LobbyReturnCameraPrelock", nil)
+			player:SetAttribute("LobbyReturnCameraSettled", nil)
+			returningToLobby = false
+			activeReturnToken = nil
+		end
+		returnRevealInProgress = false
+	end)
+end
+
 if showcaseRemote then showcaseRemote.OnClientEvent:Connect(function() task.spawn(showShowcase) end) end
+if returnLobbyRemote then returnLobbyRemote.OnClientEvent:Connect(function(action, token)
+	if action == "PREPARE" then
+		task.spawn(prepareReturnToLobby, token)
+	end
+end) end
 if deploymentRemote then deploymentRemote.OnClientEvent:Connect(function(action,a,b)
 			if action=="PREPARE" then
 				primeDeploymentTransition()
@@ -844,16 +965,47 @@ end) end
 			deploymentGroundRight=nil
 			deploymentLandingPosition=nil
 			task.spawn(showShowcase)
-		elseif phase=="DEPLOYING" then
-			-- Claim the camera immediately. Waiting until BEGIN allowed the showcase
-			-- camera to follow the teleported character into the high-altitude pod.
-			primeDeploymentTransition()
-		elseif phase=="LOBBY" then
-			restoreFrontendPresentation()
-			deploymentPrimed=false
-			deploymentBlackoutReady=false
-			player:SetAttribute("DeploymentBlackoutReady", false)
-		elseif phase~="SURVIVOR_SELECT" and active and phase~="RUN" then
+			elseif phase=="DEPLOYING" then
+				-- Claim the camera immediately. Waiting until BEGIN allowed the showcase
+				-- camera to follow the teleported character into the high-altitude pod.
+				primeDeploymentTransition()
+			elseif phase=="LOBBY" then
+				restoreFrontendPresentation()
+						deploymentPrimed=false
+						deploymentBlackoutReady=false
+						player:SetAttribute("DeploymentBlackoutReady", false)
+						tryRevealReturnedLobby()
+						local token = player:GetAttribute("LobbyReturnToken")
+						if typeof(token) == "number"
+							and player:GetAttribute("LobbyReturnCameraPrelock") == token
+							and player:GetAttribute("LobbyReturnCameraReady") == token then
+							task.spawn(function()
+								while lobbyPhaseVal.Value == "LOBBY"
+									and player:GetAttribute("LobbyReturnToken") == token
+									and player:GetAttribute("LobbyReturnCameraSettled") ~= token do
+									RunService.RenderStepped:Wait()
+								end
+								tryRevealReturnedLobby()
+							end)
+						end
+			elseif phase=="RETURNING" then
+				returningToLobby=true
+				generation+=1
+				active=false
+				rootGui.Visible=false
+				unbindInput()
+				stopCamera()
+				stopDeploymentCamera()
+				destroyPresentationFill()
+				setShowcaseGrade(false)
+				task.spawn(setControls, false)
+				-- PREPARE normally completed the fade before RETURNING was published. If a
+				-- client missed that event, keep this as a late safety cover.
+				if flow.BackgroundTransparency>0 then
+					tweenFlow(0,.1)
+				end
+				camera.CameraType=Enum.CameraType.Scriptable
+			elseif phase~="SURVIVOR_SELECT" and active and phase~="RUN" then
 			generation+=1
 			active=false
 			rootGui.Visible=false
@@ -861,8 +1013,9 @@ end) end
 			stopCamera()
 			destroyPresentationFill()
 			setShowcaseGrade(false)
-		end
-	end) end
+			end
+		end) end
+	player:GetAttributeChangedSignal("LobbyReturnCameraSettled"):Connect(tryRevealReturnedLobby)
 if gameStartedVal then gameStartedVal.Changed:Connect(function(started)
 		if started then
 			if not deploymentActive then task.spawn(enterRun) end

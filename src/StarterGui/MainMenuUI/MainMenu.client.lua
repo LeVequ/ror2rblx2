@@ -195,13 +195,29 @@ local savedLighting = {
 	FogEnd = Lighting.FogEnd,
 }
 
-Lighting.Brightness = 1.45
-Lighting.ClockTime = 18.65
-Lighting.Ambient = Color3.fromRGB(37, 51, 62)
-Lighting.OutdoorAmbient = Color3.fromRGB(49, 64, 73)
-Lighting.FogColor = Color3.fromRGB(73, 112, 126)
-Lighting.FogStart = 52
-Lighting.FogEnd = 535
+local frontendLighting = {
+	Brightness = 1.45,
+	ClockTime = 18.65,
+	Ambient = Color3.fromRGB(37, 51, 62),
+	OutdoorAmbient = Color3.fromRGB(49, 64, 73),
+	FogColor = Color3.fromRGB(73, 112, 126),
+	FogStart = 52,
+	FogEnd = 535,
+}
+
+local function applyFrontendLighting()
+	for property, value in pairs(frontendLighting) do
+		Lighting[property] = value
+	end
+end
+
+local function restoreGameplayLighting()
+	for property, value in pairs(savedLighting) do
+		Lighting[property] = value
+	end
+end
+
+applyFrontendLighting()
 
 local bloom = create("BloomEffect", "MainMenuBloom", Lighting, {
 	Intensity = 0.45,
@@ -1186,7 +1202,7 @@ end
 bindMenuCamera()
 
 local titleOwnershipReleased = false
-local frontendSceneTornDown = false
+local frontendSceneSuspended = false
 
 local function releaseTitleOwnershipForLobby()
 	if titleOwnershipReleased then return end
@@ -1199,22 +1215,53 @@ local function releaseTitleOwnershipForLobby()
 	-- ownership of the same presentation character and keeps movement locked.
 end
 
-local function teardownFrontendScene()
-	if not frontendSceneTornDown then
-		frontendSceneTornDown = true
-		if sceneFolder and sceneFolder.Parent then sceneFolder:Destroy() end
-		if bloom and bloom.Parent then bloom:Destroy() end
-		if colorGrade and colorGrade.Parent then colorGrade:Destroy() end
-
-		for property, value in pairs(savedLighting) do
-			Lighting[property] = value
-		end
-	end
+local function suspendFrontendScene()
+	if frontendSceneSuspended then return end
+	frontendSceneSuspended = true
+	-- Keep the expensive client diorama alive, but remove it from Workspace so none
+	-- of its parts render or participate in the live run. Returning can then restore
+	-- the exact same instances without rebuilding the skyline/pod set.
+	if sceneFolder and sceneFolder.Parent then sceneFolder.Parent = nil end
+	if bloom and bloom.Parent then bloom.Enabled = false end
+	if colorGrade and colorGrade.Parent then colorGrade.Enabled = false end
+	restoreGameplayLighting()
 
 	pcall(function()
 		StarterGui:SetCore("TopbarEnabled", true)
 	end)
 end
+
+local function resumeFrontendScene()
+	if not frontendSceneSuspended then return end
+	frontendSceneSuspended = false
+	applyFrontendLighting()
+	if sceneFolder and not sceneFolder.Parent then sceneFolder.Parent = workspace end
+	if bloom and bloom.Parent then bloom.Enabled = true end
+	if colorGrade and colorGrade.Parent then colorGrade.Enabled = true end
+	pcall(function()
+		StarterGui:SetCore("TopbarEnabled", false)
+	end)
+end
+
+-- Mission-failed return preparation happens while LobbyPhase is still RUN.
+-- Restore the local-only frontend before the lobby camera is allowed to prelock;
+-- waiting for RETURNING/LOBBY means the camera can arrive at an empty staging bay
+-- and the diorama/lighting only appear a few frames later.
+player:GetAttributeChangedSignal("LobbyReturnFrontendPrepare"):Connect(function()
+	local token = player:GetAttribute("LobbyReturnFrontendPrepare")
+	if typeof(token) ~= "number" then return end
+
+	resumeFrontendScene()
+	task.spawn(function()
+		-- Give the reparented parts and frontend lighting two completed render frames
+		-- before advertising readiness to the transition controller.
+		RunService.RenderStepped:Wait()
+		RunService.RenderStepped:Wait()
+		if player:GetAttribute("LobbyReturnFrontendPrepare") == token then
+			player:SetAttribute("LobbyReturnFrontendReady", token)
+		end
+	end)
+end)
 
 local function turnCameraToLobby()
 	releaseTitleOwnershipForLobby()
@@ -1366,7 +1413,7 @@ end
 bindMenuInput()
 
 local function returnToTitle()
-	if frontendSceneTornDown or not titleOwnershipReleased or gameStartedVal.Value then return end
+	if frontendSceneSuspended or not titleOwnershipReleased or gameStartedVal.Value then return end
 	transitioning = true
 	player:SetAttribute("SquadHudVisible", false)
 	activeSectionKey = nil
@@ -1438,16 +1485,19 @@ if gameStartedVal then
 			player:SetAttribute("MainMenuDismissed", true)
 			releaseTitleOwnershipForLobby()
 		end
-		-- The shared frontend grade/diorama survives lobby and survivor select, then is
-		-- cleaned up only when the actual run begins. Camera/control restoration is
-		-- deliberately left to the active lobby/showcase controller.
-		teardownFrontendScene()
+		-- Gameplay suspends rather than destroys the shared frontend. This makes a
+		-- mission-failed return a cheap reparent/lighting restore instead of a rebuild.
+		suspendFrontendScene()
 		screenGui.Enabled = false
 	end)
 end
 
 if lobbyPhaseVal then
 	lobbyPhaseVal.Changed:Connect(function(phase)
+		if phase == "RETURNING" or phase == "LOBBY" then
+			resumeFrontendScene()
+			return
+		end
 		if phase ~= "DEPLOYING" then return end
 		-- Survivor-select owns the blackout. Do not remove the shared frontend grade or
 		-- diorama until that script reports that the screen is fully opaque; otherwise
@@ -1458,7 +1508,7 @@ if lobbyPhaseVal then
 				RunService.RenderStepped:Wait()
 			end
 			if lobbyPhaseVal.Value ~= "DEPLOYING" then return end
-			teardownFrontendScene()
+			suspendFrontendScene()
 			pcall(function()
 				StarterGui:SetCore("TopbarEnabled", false)
 			end)

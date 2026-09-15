@@ -120,6 +120,7 @@ local statsTitle = make("TextLabel","StatsTitle",statsFrame,{Size=UDim2.new(1,-3
 local statsSubtitle = make("TextLabel","StatsSubtitle",statsFrame,{Size=UDim2.new(1,-36,0,22),Position=UDim2.new(0,18,0,65),BackgroundTransparency=1,Text="SQUAD STATUS // SECTOR-0",TextColor3=C.Muted,TextSize=10,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=31})
 local statsContainer = make("Frame","StatsContainer",statsFrame,{Size=UDim2.new(1,-36,0,250),Position=UDim2.new(0,18,0,102),BackgroundTransparency=1,ZIndex=31})
 local returnBtn = make("TextButton","ReturnBtn",statsFrame,{Size=UDim2.new(0,250,0,46),Position=UDim2.new(1,-268,1,-58),BackgroundColor3=Color3.fromRGB(190,214,221),BorderSizePixel=0,Text="RETURN TO LOBBY",TextColor3=Color3.fromRGB(18,30,36),TextSize=13,Font=Enum.Font.GothamBold,ZIndex=32})
+local returnTransitioning = false
 
 local spectatePanel = make("Frame","SpectatePanel",screenGui,{Size=UDim2.new(0,340,0,44),Position=UDim2.new(.5,-170,0,126),BackgroundColor3=C.Ink,BackgroundTransparency=.18,BorderSizePixel=0,Visible=false,ZIndex=20})
 stroke(spectatePanel,C.AccentSoft,.45,1)
@@ -370,7 +371,15 @@ if itemRemote then
 	end)
 end
 
-returnBtn.MouseButton1Click:Connect(function() statsFrame.Visible=false; if returnLobbyRemote then returnLobbyRemote:FireServer() end end)
+returnBtn.MouseButton1Click:Connect(function()
+	if returnTransitioning or not returnLobbyRemote then return end
+	returnTransitioning = true
+	returnBtn.Active = false
+	returnBtn.Text = "RETURNING..."
+	-- The shared frontend transition controller owns the actual blackout. Keeping
+	-- that responsibility out of the gameplay HUD prevents competing tweens/state.
+	returnLobbyRemote:FireServer("REQUEST")
+end)
 player:GetAttributeChangedSignal("SelectedClass"):Connect(updateAbilityBarNames)
 if elapsedTimeVal then elapsedTimeVal.Changed:Connect(updateHUDDisplay) end
 if threatTextVal then threatTextVal.Changed:Connect(updateHUDDisplay) end
@@ -390,14 +399,17 @@ end)
 
 if gameStartedVal then
 	gameStartedVal.Changed:Connect(function(started)
-			screenGui.Enabled=started==true
-			if not started then
-				statsFrame.Visible=false
-				teleporterPanel.Visible=false
-				stopSpectating(false)
-			end
-			if started and boundHumanoid then updateHealth(boundHumanoid) end
-		end)
+		screenGui.Enabled=started==true
+		if not started then
+			returnTransitioning=false
+			returnBtn.Active=true
+			returnBtn.Text="RETURN TO LOBBY"
+			statsFrame.Visible=false
+			teleporterPanel.Visible=false
+			stopSpectating(false)
+		end
+		if started and boundHumanoid then updateHealth(boundHumanoid) end
+	end)
 end
 
 screenGui.Enabled=gameStartedVal and gameStartedVal.Value==true or false

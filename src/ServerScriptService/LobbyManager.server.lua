@@ -1198,37 +1198,124 @@ disbandLobbyRemote.OnServerEvent:Connect(function(player)
 	disbandLobbyRemote:FireAllClients()
 end)
 
-local function returnAllToLobby()
+local returnInProgress = false
+local returnToken = 0
+local returnBlackoutReady = {}
+
+local function squadIsWiped()
+	if not gameStartedVal.Value or lobbyPhaseVal.Value ~= "RUN" then return false end
+	for _, p in ipairs(Players:GetPlayers()) do
+		local character = p.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.Health > 0 then
+			return false
+		end
+	end
+	return true
+end
+
+local function returnAllToLobby(forceReturn)
+	if returnInProgress then return end
+	if not forceReturn and not squadIsWiped() then return end
+	returnInProgress = true
+	returnToken += 1
+	local token = returnToken
+	returnBlackoutReady = {}
+
+	-- First ask every client to cover the current run. World/state mutation only
+	-- begins once the screen is actually black (or a short safety timeout expires).
+	local transitionPlayers = Players:GetPlayers()
+	returnLobbyRemote:FireAllClients("PREPARE", token)
+	local blackoutStarted = os.clock()
+	while os.clock() - blackoutStarted < 0.9 do
+		local allReady = true
+		for _, p in ipairs(transitionPlayers) do
+			if p.Parent == Players and returnBlackoutReady[p] ~= token then
+				allReady = false
+				break
+			end
+		end
+		if allReady then break end
+		task.wait()
+	end
+
+	-- RETURNING is a blackout-only handoff. Do not publish LOBBY until every
+	-- presentation character is alive, reset, and standing in its final slot.
+	lobbyPhaseVal.Value = "RETURNING"
 	gameStartedVal.Value = false
-	lobbyPhaseVal.Value = "LOBBY"
 	chargeVal.Value = 0
 	activeVal.Value = false
 	completeVal.Value = false
 	disableStageSpawns()
-
-	for _, p in ipairs(Players:GetPlayers()) do
-		restorePlayerAfterDeployment(p)
-		local character = p.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if not character or not humanoid or humanoid.Health <= 0 then
-			loadPlayerCharacter(p)
-		end
-		resetPlayerStats(p)
-		clearClassPresentation(p)
-		movePlayerToLobbySlot(p)
-	end
 	destroyDeploymentPods()
 
 	if Workspace:FindFirstChild("ActiveTeleporter") then Workspace.ActiveTeleporter:Destroy() end
 	for _, obj in ipairs(Workspace:GetChildren()) do
 		if obj:FindFirstChild("EnemyAI") then obj:Destroy() end
 	end
+
+	local lobbyPlayers = Players:GetPlayers()
+	local remaining = #lobbyPlayers
+	if remaining == 0 then
+		lobbyPhaseVal.Value = "LOBBY"
+		returnInProgress = false
+		return
+	end
+
+	-- LoadCharacter can yield. Reset players concurrently so a full squad wipe costs
+	-- roughly one avatar respawn instead of four serialized avatar respawns.
+	for _, p in ipairs(lobbyPlayers) do
+		task.spawn(function()
+			local ok, err = pcall(function()
+				restorePlayerAfterDeployment(p)
+				local character = p.Character
+				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+				if not character or not humanoid or humanoid.Health <= 0 then
+					loadPlayerCharacter(p)
+				end
+
+				if p.Parent == Players then
+					resetPlayerStats(p)
+					clearClassPresentation(p)
+					movePlayerToLobbySlot(p)
+				end
+			end)
+			if not ok then
+				warn("Lobby return reset failed for " .. p.Name .. ": " .. tostring(err))
+			end
+			remaining -= 1
+		end)
+	end
+
+	while remaining > 0 do
+		task.wait()
+	end
+
+	for _, p in ipairs(Players:GetPlayers()) do
+		p:SetAttribute("IsReady", false)
+		p:SetAttribute("ShowcaseConfirmed", false)
+	end
+
+	lobbyPhaseVal.Value = "LOBBY"
+	returnLobbyRemote:FireAllClients("LOBBY_READY", token)
+	returnInProgress = false
 end
 
-returnLobbyRemote.OnServerEvent:Connect(returnAllToLobby)
+returnLobbyRemote.OnServerEvent:Connect(function(player, action, token)
+	if action == "BLACKOUT_READY" then
+		if returnInProgress and token == returnToken then
+			returnBlackoutReady[player] = token
+		end
+		return
+	end
+
+	if action == nil or action == "REQUEST" then
+		returnAllToLobby(false)
+	end
+end)
 
 playAgainRemote.OnServerEvent:Connect(function(player)
-	returnAllToLobby()
+	returnAllToLobby(true)
 end)
 
 local function findStage1Spawn()
